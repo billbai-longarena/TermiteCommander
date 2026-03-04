@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { SignalBridge } from "../../colony/signal-bridge.js";
+import { SignalBridge, type SignalDetail } from "../../colony/signal-bridge.js";
 import {
   readLockFile,
   readStatusFile,
@@ -17,6 +17,7 @@ export interface ColonyStatus {
 
 export interface ColonyState {
   status: ColonyStatus;
+  signals: SignalDetail[];
   lockData: LockData | null;
   statusData: StatusFileData | null;
   isRunning: boolean;
@@ -37,6 +38,7 @@ export function useColonyState(
 ): ColonyState {
   const [state, setState] = useState<ColonyState>({
     status: EMPTY_STATUS,
+    signals: [],
     lockData: null,
     statusData: null,
     isRunning: false,
@@ -51,6 +53,7 @@ export function useColonyState(
       try {
         const bridge = bridgeRef.current!;
         const bridgeStatus = await bridge.status();
+        const signals = await bridge.listSignals();
         const lockData = readLockFile(colonyRoot);
         const statusData = readStatusFile(colonyRoot);
 
@@ -72,6 +75,7 @@ export function useColonyState(
             done: bridgeStatus.done ?? 0,
             blocked: 0,
           },
+          signals,
           lockData,
           statusData,
           isRunning,
