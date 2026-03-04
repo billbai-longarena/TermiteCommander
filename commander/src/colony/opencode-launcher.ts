@@ -1,17 +1,21 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { existsSync, copyFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export interface OpenCodeWorker {
   id: string;
-  process: ChildProcess;
+  sessionId: string | null;
+  process: ChildProcess | null;
   startedAt: Date;
-  status: "running" | "stopped" | "errored";
+  status: "running" | "stopped" | "errored" | "idle";
 }
 
 export interface LauncherConfig {
   colonyRoot: string;
-  skillSourceDir: string; // commander/skills/termite/
+  skillSourceDir: string;
   maxWorkers: number;
 }
 
@@ -25,7 +29,6 @@ export class OpenCodeLauncher {
 
   /**
    * Install termite skill files into the colony so OpenCode can discover them.
-   * Copies from commander/skills/termite/ to <colonyRoot>/.opencode/skill/termite/
    */
   installSkills(): void {
     const destDir = join(this.config.colonyRoot, ".opencode", "skill", "termite");
@@ -43,8 +46,8 @@ export class OpenCodeLauncher {
   }
 
   /**
-   * Launch an OpenCode worker as a termite.
-   * Sends "\u767D\u8681\u534F\u8BAE" as initial prompt to trigger colony arrival.
+   * Launch an OpenCode worker using `opencode run` (non-interactive mode).
+   * The first call creates a new session; subsequent pulses continue it.
    */
   async launchWorker(workerId?: string): Promise<OpenCodeWorker> {
     const id = workerId ?? `termite-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -53,78 +56,111 @@ export class OpenCodeLauncher {
       throw new Error(`Max workers (${this.config.maxWorkers}) reached`);
     }
 
-    console.log(`[launcher] Starting OpenCode worker: ${id}`);
-
-    // Launch opencode in non-interactive mode with initial prompt
-    const child = spawn("opencode", [], {
-      cwd: this.config.colonyRoot,
-      stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        OPENCODE_SESSION: id,
-        TERMITE_WORKER_ID: id,
-      },
-    });
-
     const worker: OpenCodeWorker = {
       id,
-      process: child,
+      sessionId: null,
+      process: null,
       startedAt: new Date(),
-      status: "running",
+      status: "idle",
     };
-
-    child.stdout?.on("data", (data: Buffer) => {
-      const text = data.toString().trim();
-      if (text) console.log(`[worker:${id}] ${text.slice(0, 200)}`);
-    });
-
-    child.stderr?.on("data", (data: Buffer) => {
-      const text = data.toString().trim();
-      if (text) console.error(`[worker:${id}:err] ${text.slice(0, 200)}`);
-    });
-
-    child.on("exit", (code) => {
-      console.log(`[worker:${id}] Exited with code ${code}`);
-      worker.status = code === 0 ? "stopped" : "errored";
-    });
-
     this.workers.set(id, worker);
 
-    // Wait a moment for the process to start, then inject initial prompt
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    this.injectPrompt(id, "\u767D\u8681\u534F\u8BAE");
+    console.log(`[launcher] Starting OpenCode worker: ${id}`);
+
+    // Launch with opencode run — non-interactive, single message
+    await this.runOpenCode(worker, "白蚁协议");
 
     return worker;
   }
 
   /**
-   * Inject a prompt into a running OpenCode worker's stdin.
-   * This is how the heartbeat triggers continued work.
+   * Run opencode for a worker. First call creates session, subsequent calls continue it.
    */
-  injectPrompt(workerId: string, prompt: string): boolean {
-    const worker = this.workers.get(workerId);
-    if (!worker || worker.status !== "running") {
-      return false;
+  private async runOpenCode(worker: OpenCodeWorker, prompt: string): Promise<void> {
+    const args = ["run", prompt, "--format", "json", "--dir", resolve(this.config.colonyRoot)];
+
+    // Continue existing session if we have one
+    if (worker.sessionId) {
+      args.push("--session", worker.sessionId);
+    } else {
+      args.push("--title", `Termite: ${worker.id}`);
     }
 
-    try {
-      worker.process.stdin?.write(prompt + "\n");
-      return true;
-    } catch {
-      return false;
-    }
+    worker.status = "running";
+
+    const child = spawn("opencode", args, {
+      cwd: resolve(this.config.colonyRoot),
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        TERMITE_WORKER_ID: worker.id,
+      },
+    });
+
+    worker.process = child;
+
+    let stdout = "";
+    child.stdout?.on("data", (data: Buffer) => {
+      const text = data.toString();
+      stdout += text;
+      // Extract session ID from JSON output
+      for (const line of text.split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const obj = JSON.parse(line);
+          if (obj.sessionID && !worker.sessionId) {
+            worker.sessionId = obj.sessionID;
+            console.log(`[worker:${worker.id}] Session: ${worker.sessionId}`);
+          }
+        } catch {
+          // Not JSON, skip
+        }
+      }
+    });
+
+    child.stderr?.on("data", (data: Buffer) => {
+      const text = data.toString().trim();
+      if (text) console.error(`[worker:${worker.id}:err] ${text.slice(0, 300)}`);
+    });
+
+    child.on("exit", (code) => {
+      console.log(`[worker:${worker.id}] Run exited with code ${code}`);
+      worker.status = code === 0 ? "idle" : "errored";
+      worker.process = null;
+    });
   }
 
   /**
-   * Inject heartbeat into all running workers.
+   * Pulse a single worker: send "白蚁协议" via opencode run --continue.
+   * Only pulses idle workers (not currently running).
    */
-  pulseAllWorkers(): number {
+  async pulseWorker(workerId: string): Promise<boolean> {
+    const worker = this.workers.get(workerId);
+    if (!worker) return false;
+
+    // Skip if already running a task
+    if (worker.status === "running") {
+      return false;
+    }
+
+    // Skip errored workers
+    if (worker.status === "errored") {
+      return false;
+    }
+
+    await this.runOpenCode(worker, "白蚁协议");
+    return true;
+  }
+
+  /**
+   * Pulse all idle workers.
+   */
+  async pulseAllWorkers(): Promise<number> {
     let count = 0;
     for (const [id, worker] of this.workers) {
-      if (worker.status === "running") {
-        if (this.injectPrompt(id, "\u767D\u8681\u534F\u8BAE")) {
-          count++;
-        }
+      if (worker.status === "idle") {
+        await this.pulseWorker(id);
+        count++;
       }
     }
     return count;
@@ -135,8 +171,10 @@ export class OpenCodeLauncher {
    */
   stopWorker(workerId: string): void {
     const worker = this.workers.get(workerId);
-    if (worker && worker.status === "running") {
-      worker.process.kill("SIGTERM");
+    if (worker) {
+      if (worker.process) {
+        worker.process.kill("SIGTERM");
+      }
       worker.status = "stopped";
       console.log(`[launcher] Stopped worker: ${workerId}`);
     }
@@ -152,9 +190,20 @@ export class OpenCodeLauncher {
   }
 
   /**
-   * Get count of active workers.
+   * Get count of active workers (running or idle with session).
    */
   activeCount(): number {
+    let count = 0;
+    for (const worker of this.workers.values()) {
+      if (worker.status === "running" || worker.status === "idle") count++;
+    }
+    return count;
+  }
+
+  /**
+   * Get count of currently executing workers.
+   */
+  runningCount(): number {
     let count = 0;
     for (const worker of this.workers.values()) {
       if (worker.status === "running") count++;

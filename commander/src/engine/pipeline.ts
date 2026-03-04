@@ -172,10 +172,10 @@ export class Pipeline {
       baseIntervalMs: 15_000,
       maxIntervalMs: 60_000,
       stallThreshold: 20,
-      onCycle: (snap, interval) => {
-        // Pulse all workers on each colony heartbeat
-        const pulsed = this.launcher.pulseAllWorkers();
-        console.log(`[colony-hb] open=${snap.openSignals} claimed=${snap.claimedSignals} pulsed=${pulsed} interval=${Math.round(interval)}ms`);
+      onCycle: async (snap, interval) => {
+        // Pulse all idle workers on each colony heartbeat
+        const pulsed = await this.launcher.pulseAllWorkers();
+        console.log(`[colony-hb] open=${snap.openSignals} claimed=${snap.claimedSignals} running=${this.launcher.runningCount()} pulsed=${pulsed} interval=${Math.round(interval)}ms`);
       },
       onHalt: (reason) => {
         console.log(`[colony] Stopped: ${reason}`);
