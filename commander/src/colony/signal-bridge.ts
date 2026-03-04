@@ -1,7 +1,6 @@
-// commander/src/colony/signal-bridge.ts
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -32,8 +31,8 @@ export class SignalBridge {
   private scriptsDir: string;
 
   constructor(colonyRoot: string) {
-    this.colonyRoot = colonyRoot;
-    this.scriptsDir = join(colonyRoot, "scripts");
+    this.colonyRoot = resolve(colonyRoot);
+    this.scriptsDir = join(this.colonyRoot, "scripts");
   }
 
   hasScripts(): boolean {
@@ -45,7 +44,12 @@ export class SignalBridge {
       const { stdout, stderr } = await execFileAsync(command, args, {
         cwd: cwd ?? this.colonyRoot,
         timeout: 30_000,
-        env: { ...process.env, COLONY_ROOT: this.colonyRoot },
+        env: {
+          ...process.env,
+          COLONY_ROOT: this.colonyRoot,
+          PROJECT_ROOT: this.colonyRoot,
+          SCRIPT_DIR: this.scriptsDir,
+        },
       });
       return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0 };
     } catch (err: any) {
@@ -65,11 +69,24 @@ export class SignalBridge {
     return this.exec("bash", [scriptPath, ...args]);
   }
 
+  /**
+   * Build the preamble that every DB-touching bash snippet needs:
+   * sets PROJECT_ROOT, SCRIPT_DIR, sources termite-db.sh, calls db_ensure.
+   */
+  private dbPreamble(): string {
+    return [
+      `export PROJECT_ROOT="${this.colonyRoot}"`,
+      `export SCRIPT_DIR="${this.scriptsDir}"`,
+      `source "${join(this.scriptsDir, "field-lib.sh")}" 2>/dev/null || true`,
+      `source "${join(this.scriptsDir, "termite-db.sh")}"`,
+      `db_ensure`,
+    ].join(" && ");
+  }
+
   async status(): Promise<ColonyStatus> {
-    const result = await this.exec("bash", [
-      "-c",
-      `source ${join(this.scriptsDir, "termite-db.sh")} && db_init "${this.colonyRoot}" && echo "$(db_signal_count "status='open'")|$(db_signal_count "status='claimed'")|$(db_signal_count "status IN ('done','completed')")|$(db_signal_count)"`,
-    ]);
+    const script = `${this.dbPreamble()} && echo "$(db_signal_count "status='open'")|$(db_signal_count "status='claimed'")|$(db_signal_count "status IN ('done','completed')")|$(db_signal_count)"`;
+
+    const result = await this.exec("bash", ["-c", script]);
 
     if (result.exitCode !== 0) {
       return { total: 0, open: 0, claimed: 0, done: 0, blocked: 0 };
@@ -95,26 +112,26 @@ export class SignalBridge {
     module?: string;
     nextHint?: string;
   }): Promise<ExecResult> {
-    const script = `
-      source ${join(this.scriptsDir, "termite-db.sh")}
-      db_init "${this.colonyRoot}"
-      ID=$(db_next_signal_id S)
-      db_signal_create "$ID" "${params.type}" "$(db_escape "${params.title}")" "open" "${params.weight}" "14" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "commander" "${params.module || ""}" "[]" "$(db_escape "${params.nextHint || ""}")" "0" "${params.source}" "${params.parentId || ""}" "$(db_escape "${params.childHint || ""}")" "${params.parentId ? 1 : 0}"
-    `;
+    // Escape values at JS level to avoid bash injection
+    const esc = (s: string) => s.replace(/'/g, "'\\''");
+    const type = esc(params.type || "HOLE");
+    const title = esc(params.title);
+    const weight = String(params.weight || 80);
+    const source = esc(params.source || "directive");
+    const module = esc(params.module ?? "");
+    const nextHint = esc(params.nextHint ?? "");
+    const parentId = esc(params.parentId ?? "");
+    const childHint = esc(params.childHint ?? "");
+    const depth = params.parentId ? "1" : "0";
+
+    const script = `${this.dbPreamble()} && ID=$(db_next_signal_id S) && NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ) && db_signal_create "$ID" '${type}' '${title}' 'open' '${weight}' '14' "$NOW" "$NOW" 'commander' '${module}' '[]' '${nextHint}' '0' '${source}' '${parentId}' '${childHint}' '${depth}' && echo "$ID"`;
+
     return this.exec("bash", ["-c", script]);
   }
 
   async checkStall(sinceMinutes: number): Promise<StallStatus> {
-    const script = `
-      source ${join(this.scriptsDir, "termite-db.sh")}
-      db_init "${this.colonyRoot}"
-      LAST_COMMIT=$(git -C "${this.colonyRoot}" log -1 --format=%ct 2>/dev/null || echo 0)
-      NOW=$(date +%s)
-      AGE=$(( (NOW - LAST_COMMIT) / 60 ))
-      OPEN=$(db_signal_count "status='open'")
-      CLAIMED=$(db_signal_count "status='claimed'")
-      echo "$AGE|$OPEN|$CLAIMED"
-    `;
+    const script = `${this.dbPreamble()} && LAST_COMMIT=$(git -C "${this.colonyRoot}" log -1 --format=%ct 2>/dev/null || echo 0) && NOW=$(date +%s) && AGE=$(( (NOW - LAST_COMMIT) / 60 )) && OPEN=$(db_signal_count "status='open'") && CLAIMED=$(db_signal_count "status='claimed'") && echo "$AGE|$OPEN|$CLAIMED"`;
+
     const result = await this.exec("bash", ["-c", script]);
     if (result.exitCode !== 0) {
       return { stalled: false, lastCommitMinutesAgo: 0, openSignals: 0, claimedSignals: 0 };
