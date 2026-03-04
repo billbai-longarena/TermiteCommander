@@ -12,7 +12,7 @@ function detectPlatform(): "opencode" | "claude-code" | "unknown" {
 }
 
 program
-  .name("commander")
+  .name("termite-commander")
   .description("Termite Commander — autonomous orchestration engine")
   .version("0.1.0");
 

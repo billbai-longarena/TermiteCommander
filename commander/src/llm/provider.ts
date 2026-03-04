@@ -13,9 +13,14 @@ function getAzureOpenAI() {
     throw new Error("AZURE_OPENAI_API_KEY not set");
   }
 
+  const baseURL = process.env.AZURE_OPENAI_ENDPOINT;
+  if (!baseURL) {
+    throw new Error("AZURE_OPENAI_ENDPOINT not set (e.g. https://your-resource.cognitiveservices.azure.com/openai/v1)");
+  }
+
   return createOpenAI({
     apiKey,
-    baseURL: "https://bill-3691-resource.cognitiveservices.azure.com/openai/v1",
+    baseURL,
   });
 }
 
