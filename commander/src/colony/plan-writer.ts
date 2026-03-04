@@ -9,7 +9,7 @@ export interface SignalEntry {
 
 export interface Plan {
   objective: string;
-  taskType: "RESEARCH" | "BUILD" | "ANALYZE" | "HYBRID";
+  taskType: "BUILD" | "HYBRID";
   audience: string;
   researchFindings: string;
   userScenarios: string;

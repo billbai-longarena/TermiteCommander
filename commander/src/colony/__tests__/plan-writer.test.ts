@@ -5,15 +5,15 @@ describe("PlanWriter", () => {
   it("should generate valid PLAN.md content from a plan object", () => {
     const plan: Plan = {
       objective: "调研新能源行业前十大客户的财报趋势",
-      taskType: "RESEARCH",
+      taskType: "BUILD",
       audience: "Business analyst, non-technical",
       researchFindings: "Found 10 companies with public financials...",
       userScenarios: "Analyst needs comparative dashboard...",
       architecture: null,
       synthesis: "Three key trends identified: 1) ...",
       signals: [
-        { id: "S-001", type: "RESEARCH", title: "Collect Top 10 company data", weight: 80, parentId: null, status: "open" },
-        { id: "S-002", type: "RESEARCH", title: "Cross-company comparison", weight: 75, parentId: "S-001", status: "open" },
+        { id: "S-001", type: "EXPLORE", title: "Collect Top 10 company data", weight: 80, parentId: null, status: "open" },
+        { id: "S-002", type: "REPORT", title: "Cross-company comparison", weight: 75, parentId: "S-001", status: "open" },
       ],
       qualityCriteria: "Each finding must cite data source",
       deliverableFormat: "Markdown report",
@@ -23,7 +23,7 @@ describe("PlanWriter", () => {
     expect(md).toContain("# Plan:");
     expect(md).toContain("调研新能源行业");
     expect(md).toContain("## Task Type");
-    expect(md).toContain("RESEARCH");
+    expect(md).toContain("BUILD");
     expect(md).toContain("## Signal Map");
     expect(md).toContain("S-001");
     expect(md).toContain("S-002");

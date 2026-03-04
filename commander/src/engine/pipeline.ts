@@ -1,4 +1,4 @@
-import { writeFileSync, unlinkSync, existsSync } from "node:fs";
+import { writeFileSync, unlinkSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { TaskClassifier } from "./classifier.js";
 import { SignalDecomposer, type DecomposedSignal } from "./decomposer.js";
@@ -80,7 +80,19 @@ export class Pipeline {
     }
   }
 
-  async plan(objective: string): Promise<Plan> {
+  async plan(
+    objective: string,
+    opts?: { planFile?: string; context?: string },
+  ): Promise<Plan> {
+    // Read design context from file or direct text
+    let designContext = "";
+    if (opts?.planFile) {
+      console.log(`[commander] Reading design context from ${opts.planFile}...`);
+      designContext = readFileSync(opts.planFile, "utf-8");
+    } else if (opts?.context) {
+      designContext = opts.context;
+    }
+
     console.log("[commander] Phase 0: Classifying task...");
     const taskType = await TaskClassifier.classifyWithLLM(
       objective,
@@ -88,40 +100,11 @@ export class Pipeline {
     );
     console.log(`[commander] Task type: ${taskType}`);
 
-    console.log("[commander] Phase 1: Researching...");
-    const researchFindings = await callLLM(
-      `You are a research analyst. Analyze this objective and provide key findings, relevant context, and recommendations.\n\nObjective: ${objective}\n\nProvide structured research findings:`,
-      this.config.llmConfig,
-    );
-
-    console.log("[commander] Phase 2: Simulating user scenarios...");
-    const userScenarios = await callLLM(
-      `Based on this objective, identify the target audience and key scenarios:\n\nObjective: ${objective}\nTask Type: ${taskType}\n\nDescribe: who consumes the output, what scenarios matter, what edge cases exist.`,
-      this.config.llmConfig,
-    );
-
-    console.log("[commander] Phase 3: Designing...");
-    let architecture: string | null = null;
-    let synthesis: string | null = null;
-
-    if (taskType === "BUILD" || taskType === "HYBRID") {
-      architecture = await callLLM(
-        `Design the technical architecture for:\n\nObjective: ${objective}\n\nResearch: ${researchFindings}\n\nProvide: module decomposition, key interfaces, data flow, technology choices.`,
-        this.config.llmConfig,
-      );
-    }
-    if (taskType === "RESEARCH" || taskType === "HYBRID" || taskType === "ANALYZE") {
-      synthesis = await callLLM(
-        `Synthesize the research findings into actionable analysis:\n\nObjective: ${objective}\n\nResearch: ${researchFindings}\n\nProvide: key trends, gaps, comparative insights, recommendations.`,
-        this.config.llmConfig,
-      );
-    }
-
-    console.log("[commander] Phase 4: Decomposing into signals...");
+    console.log("[commander] Phase 1: Decomposing into signals...");
     const decompositionPrompt = SignalDecomposer.buildDecompositionPrompt(
       objective,
       taskType,
-      researchFindings,
+      designContext,
     );
     const signalsJson = await callLLM(decompositionPrompt, this.config.llmConfig);
 
@@ -139,20 +122,14 @@ export class Pipeline {
 
     signals = SignalDecomposer.topologicalSort(signals);
 
-    console.log("[commander] Phase 5: Defining quality criteria...");
-    const qualityCriteria = await callLLM(
-      `Define acceptance criteria for this work:\n\nObjective: ${objective}\nTask Type: ${taskType}\nSignals: ${signals.map((s) => s.title).join(", ")}\n\nProvide: per-signal acceptance criteria and global quality standards.`,
-      this.config.llmConfig,
-    );
-
     const plan: Plan = {
       objective,
       taskType,
-      audience: userScenarios.slice(0, 200),
-      researchFindings,
-      userScenarios,
-      architecture,
-      synthesis,
+      audience: "",
+      researchFindings: "",
+      userScenarios: "",
+      architecture: null,
+      synthesis: null,
       signals: signals.map((s, i) => ({
         id: `S-${String(i + 1).padStart(3, "0")}`,
         type: s.type,
@@ -161,8 +138,8 @@ export class Pipeline {
         parentId: s.parentId,
         status: "open",
       })),
-      qualityCriteria,
-      deliverableFormat: taskType === "BUILD" ? "Code + tests" : taskType === "RESEARCH" ? "Report" : "Analysis + code",
+      qualityCriteria: "",
+      deliverableFormat: taskType === "BUILD" ? "Code + tests" : "Analysis + code",
     };
 
     return plan;

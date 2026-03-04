@@ -21,9 +21,11 @@ program
   .command("plan <objective>")
   .description("Plan and decompose an objective into colony signals")
   .option("-c, --colony <path>", "Colony root directory", process.cwd())
+  .option("-p, --plan <file>", "Design document to use as decomposition context")
+  .option("--context <text>", "Direct text context for decomposition")
   .option("--dispatch", "Dispatch signals immediately after planning", false)
   .option("--run", "Plan, dispatch, and start heartbeats", false)
-  .action(async (objective: string, opts: { colony: string; dispatch: boolean; run: boolean }) => {
+  .action(async (objective: string, opts: { colony: string; plan?: string; context?: string; dispatch: boolean; run: boolean }) => {
     const config: PipelineConfig = {
       colonyRoot: opts.colony,
       platform: detectPlatform(),
@@ -36,7 +38,10 @@ program
     };
 
     const pipeline = new Pipeline(config);
-    const plan = await pipeline.plan(objective);
+    const plan = await pipeline.plan(objective, {
+      planFile: opts.plan,
+      context: opts.context,
+    });
 
     console.log("\n=== PLAN ===");
     console.log(`Type: ${plan.taskType}`);

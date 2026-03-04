@@ -1,5 +1,5 @@
 export interface DecomposedSignal {
-  type: "HOLE" | "EXPLORE" | "RESEARCH" | "REPORT" | "REVIEW" | "FEEDBACK";
+  type: "HOLE" | "EXPLORE" | "REPORT" | "REVIEW";
   title: string;
   weight: number;
   source: "directive" | "autonomous";
@@ -73,39 +73,49 @@ export class SignalDecomposer {
   static buildDecompositionPrompt(
     objective: string,
     taskType: string,
-    researchFindings: string,
+    designContext: string,
   ): string {
-    return `You are a software architect decomposing a task into atomic work signals.
+    return `You are decomposing a task into atomic signals that WEAK language models (haiku-class) can execute.
 
-Task Type: ${taskType}
 Objective: ${objective}
+Task Type: ${taskType}
 
-Research Context:
-${researchFindings}
+Design Context:
+${designContext}
 
-Decompose this into a list of atomic signals. Each signal should be ONE verifiable deliverable.
+CRITICAL: Each signal must be completable by a weak model in a single session.
 
-Rules:
-- Signal types: HOLE (code gap), EXPLORE (investigation), RESEARCH (data collection), REPORT (writing), REVIEW (quality check)
-- Weight: 70-90 for directive signals (higher = more urgent)
-- Max tree depth: 3
-- Independent signals should have parentId: null (they can run in parallel)
-- Dependent signals should reference their parent's title
-- Each signal MUST have clear acceptance criteria
+Signal Standards for Weak Models:
+- ATOMIC: one clear action, one file/module, completable in ~10 minutes
+- SELF-CONTAINED: title + nextHint must contain ALL context needed (file paths, function names, expected behavior)
+- VERIFIABLE: explicit acceptance criteria the model can check itself
+- SPECIFIC PATHS: always specify exact file paths, don't let the model guess
+- MAX DEPTH 3: keep dependencies flat, maximize parallelism (parentId: null)
+
+Signal types: HOLE (write/modify code), EXPLORE (investigate code), REPORT (write docs), REVIEW (check quality)
+Weight: 70-90 for directive signals (higher = more urgent)
+
+BAD signal (too vague for weak model):
+  "Implement authentication" — weak model won't know where to start
+
+GOOD signal (atomic, self-contained):
+  title: "Create src/middleware/auth.ts: JWT verification middleware"
+  nextHint: "Create file src/middleware/auth.ts. Import jsonwebtoken. Export function verifyToken(req, res, next) that reads Authorization header, verifies JWT with process.env.JWT_SECRET, calls next() on success or res.status(401).json({error:'unauthorized'}) on failure."
+  acceptanceCriteria: "File exists, exports verifyToken, has basic test"
 
 Output as JSON array:
 [
   {
     "type": "HOLE",
-    "title": "Brief, specific description",
+    "title": "Brief but specific description with file path",
     "weight": 80,
     "parentId": null,
     "module": "relevant/path/",
-    "nextHint": "Specific next action for the termite",
+    "nextHint": "Detailed step-by-step instructions for a weak model",
     "acceptanceCriteria": "How to verify this is done"
   }
 ]
 
-Respond with ONLY the JSON array, no other text.`;
+Respond with ONLY the JSON array.`;
   }
 }
