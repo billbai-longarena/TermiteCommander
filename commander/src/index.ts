@@ -3,6 +3,7 @@
 import { program } from "commander";
 import { Pipeline, type PipelineConfig } from "./engine/pipeline.js";
 import { SignalBridge } from "./colony/signal-bridge.js";
+import { resolve } from "node:path";
 
 function detectPlatform(): "opencode" | "claude-code" | "unknown" {
   if (process.env.CLAUDE_PROJECT_DIR) return "claude-code";
@@ -25,11 +26,12 @@ program
     const config: PipelineConfig = {
       colonyRoot: opts.colony,
       platform: detectPlatform(),
-      generateText: async (prompt: string) => {
-        // TODO: Wire to actual LLM via Vercel AI SDK
-        console.log(`[llm] Prompt: ${prompt.slice(0, 100)}...`);
-        return `[LLM response placeholder for: ${prompt.slice(0, 50)}]`;
+      llmConfig: {
+        provider: (process.env.COMMANDER_LLM_PROVIDER as any) ?? "azure-openai",
+        model: process.env.COMMANDER_LLM_MODEL,
       },
+      skillSourceDir: resolve(import.meta.dirname ?? ".", "../skills/termite"),
+      maxWorkers: parseInt(process.env.COMMANDER_MAX_WORKERS ?? "3", 10),
     };
 
     const pipeline = new Pipeline(config);

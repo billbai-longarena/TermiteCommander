@@ -4,38 +4,50 @@ import { SignalBridge } from "../colony/signal-bridge.js";
 import { PlanWriter, type Plan } from "../colony/plan-writer.js";
 import { CommanderLoop } from "../heartbeat/commander-loop.js";
 import { ColonyLoop, type Platform } from "../heartbeat/colony-loop.js";
+import { callLLM, type LLMConfig } from "../llm/provider.js";
+import { OpenCodeLauncher } from "../colony/opencode-launcher.js";
 
 export interface PipelineConfig {
   colonyRoot: string;
-  platform: Platform;
-  generateText: (prompt: string) => Promise<string>;
+  platform: "opencode" | "claude-code" | "unknown";
+  llmConfig?: LLMConfig;
+  skillSourceDir: string; // path to commander/skills/termite/
+  maxWorkers?: number;
 }
 
 export class Pipeline {
   private config: PipelineConfig;
   private bridge: SignalBridge;
+  private launcher: OpenCodeLauncher;
 
   constructor(config: PipelineConfig) {
     this.config = config;
     this.bridge = new SignalBridge(config.colonyRoot);
+    this.launcher = new OpenCodeLauncher({
+      colonyRoot: config.colonyRoot,
+      skillSourceDir: config.skillSourceDir,
+      maxWorkers: config.maxWorkers ?? 3,
+    });
   }
 
   async plan(objective: string): Promise<Plan> {
     console.log("[commander] Phase 0: Classifying task...");
     const taskType = await TaskClassifier.classifyWithLLM(
       objective,
-      this.config.generateText,
+      (prompt) => callLLM(prompt, this.config.llmConfig),
     );
     console.log(`[commander] Task type: ${taskType}`);
 
     console.log("[commander] Phase 1: Researching...");
-    const researchFindings = await this.config.generateText(
+    const researchFindings = await callLLM(
       `You are a research analyst. Analyze this objective and provide key findings, relevant context, and recommendations.\n\nObjective: ${objective}\n\nProvide structured research findings:`,
+      this.config.llmConfig,
     );
 
     console.log("[commander] Phase 2: Simulating user scenarios...");
-    const userScenarios = await this.config.generateText(
+    const userScenarios = await callLLM(
       `Based on this objective, identify the target audience and key scenarios:\n\nObjective: ${objective}\nTask Type: ${taskType}\n\nDescribe: who consumes the output, what scenarios matter, what edge cases exist.`,
+      this.config.llmConfig,
     );
 
     console.log("[commander] Phase 3: Designing...");
@@ -43,13 +55,15 @@ export class Pipeline {
     let synthesis: string | null = null;
 
     if (taskType === "BUILD" || taskType === "HYBRID") {
-      architecture = await this.config.generateText(
+      architecture = await callLLM(
         `Design the technical architecture for:\n\nObjective: ${objective}\n\nResearch: ${researchFindings}\n\nProvide: module decomposition, key interfaces, data flow, technology choices.`,
+        this.config.llmConfig,
       );
     }
     if (taskType === "RESEARCH" || taskType === "HYBRID" || taskType === "ANALYZE") {
-      synthesis = await this.config.generateText(
+      synthesis = await callLLM(
         `Synthesize the research findings into actionable analysis:\n\nObjective: ${objective}\n\nResearch: ${researchFindings}\n\nProvide: key trends, gaps, comparative insights, recommendations.`,
+        this.config.llmConfig,
       );
     }
 
@@ -59,7 +73,7 @@ export class Pipeline {
       taskType,
       researchFindings,
     );
-    const signalsJson = await this.config.generateText(decompositionPrompt);
+    const signalsJson = await callLLM(decompositionPrompt, this.config.llmConfig);
 
     let signals: DecomposedSignal[] = [];
     try {
@@ -76,8 +90,9 @@ export class Pipeline {
     signals = SignalDecomposer.topologicalSort(signals);
 
     console.log("[commander] Phase 5: Defining quality criteria...");
-    const qualityCriteria = await this.config.generateText(
+    const qualityCriteria = await callLLM(
       `Define acceptance criteria for this work:\n\nObjective: ${objective}\nTask Type: ${taskType}\nSignals: ${signals.map((s) => s.title).join(", ")}\n\nProvide: per-signal acceptance criteria and global quality standards.`,
+      this.config.llmConfig,
     );
 
     const plan: Plan = {
@@ -125,31 +140,57 @@ export class Pipeline {
   async runWithHeartbeats(plan: Plan): Promise<void> {
     await this.dispatch(plan);
 
+    // Install termite skills into colony
+    this.launcher.installSkills();
+
+    // Determine how many workers to launch based on parallel signals
+    const parallelSignals = plan.signals.filter((s) => !s.parentId).length;
+    const workerCount = Math.min(parallelSignals, this.config.maxWorkers ?? 3);
+
+    console.log(`[commander] Launching ${workerCount} OpenCode workers...`);
+    for (let i = 0; i < workerCount; i++) {
+      await this.launcher.launchWorker();
+    }
+
+    // Start heartbeat loops
     const commanderLoop = new CommanderLoop({
       colonyRoot: this.config.colonyRoot,
       intervalMs: 60_000,
       stallThreshold: 10,
       onCycle: (snap) => {
-        console.log(`[commander-hb] open=${snap.openSignals} claimed=${snap.claimedSignals} commits=${snap.newCommits}`);
+        console.log(`[commander-hb] open=${snap.openSignals} claimed=${snap.claimedSignals} commits=${snap.newCommits} workers=${this.launcher.activeCount()}`);
       },
       onHalt: (info) => {
-        console.log(`[commander] HALTED: ${info.reason}. See HALT.md`);
+        console.log(`[commander] HALTED: ${info.reason}. Stopping workers...`);
+        this.launcher.stopAll();
       },
     });
 
     const colonyLoop = new ColonyLoop({
       colonyRoot: this.config.colonyRoot,
-      platform: this.config.platform,
+      platform: "opencode",
       baseIntervalMs: 15_000,
       maxIntervalMs: 60_000,
       stallThreshold: 20,
       onCycle: (snap, interval) => {
-        console.log(`[colony-hb] open=${snap.openSignals} claimed=${snap.claimedSignals} interval=${Math.round(interval)}ms`);
+        // Pulse all workers on each colony heartbeat
+        const pulsed = this.launcher.pulseAllWorkers();
+        console.log(`[colony-hb] open=${snap.openSignals} claimed=${snap.claimedSignals} pulsed=${pulsed} interval=${Math.round(interval)}ms`);
       },
       onHalt: (reason) => {
         console.log(`[colony] Stopped: ${reason}`);
+        this.launcher.stopAll();
         commanderLoop.stop();
       },
+    });
+
+    // Handle process exit
+    process.on("SIGINT", () => {
+      console.log("\n[commander] Interrupted. Stopping...");
+      this.launcher.stopAll();
+      commanderLoop.stop();
+      colonyLoop.stop();
+      process.exit(0);
     });
 
     await Promise.all([
