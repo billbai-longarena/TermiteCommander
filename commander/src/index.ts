@@ -29,12 +29,7 @@ program
     const config: PipelineConfig = {
       colonyRoot: opts.colony,
       platform: detectPlatform(),
-      llmConfig: {
-        provider: (process.env.COMMANDER_LLM_PROVIDER as any) ?? "azure-openai",
-        model: process.env.COMMANDER_LLM_MODEL,
-      },
       skillSourceDir: resolve(import.meta.dirname ?? ".", "../skills/termite"),
-      maxWorkers: parseInt(process.env.COMMANDER_MAX_WORKERS ?? "3", 10),
     };
 
     const pipeline = new Pipeline(config);

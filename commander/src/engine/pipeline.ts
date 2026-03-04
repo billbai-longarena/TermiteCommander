@@ -7,6 +7,8 @@ import { PlanWriter, type Plan } from "../colony/plan-writer.js";
 import { CommanderLoop } from "../heartbeat/commander-loop.js";
 import { ColonyLoop, type Platform } from "../heartbeat/colony-loop.js";
 import { callLLM, type LLMConfig } from "../llm/provider.js";
+import { configFromResolved } from "../llm/provider.js";
+import { resolveModels, type ResolvedModels } from "../config/model-resolver.js";
 import { OpenCodeLauncher } from "../colony/opencode-launcher.js";
 
 export interface PipelineConfig {
@@ -14,21 +16,29 @@ export interface PipelineConfig {
   platform: "opencode" | "claude-code" | "unknown";
   llmConfig?: LLMConfig;
   skillSourceDir: string; // path to commander/skills/termite/
-  maxWorkers?: number;
+  // maxWorkers removed — driven by model-resolver
 }
 
 export class Pipeline {
   private config: PipelineConfig;
   private bridge: SignalBridge;
   private launcher: OpenCodeLauncher;
+  private models: ResolvedModels;
 
   constructor(config: PipelineConfig) {
     this.config = config;
     this.bridge = new SignalBridge(config.colonyRoot);
+    this.models = resolveModels(config.colonyRoot);
+    // Override llmConfig with resolved models
+    this.config.llmConfig = configFromResolved(this.models);
     this.launcher = new OpenCodeLauncher({
       colonyRoot: config.colonyRoot,
       skillSourceDir: config.skillSourceDir,
-      maxWorkers: config.maxWorkers ?? 3,
+      workerSpecs: this.models.workers.map((w) => ({
+        model: w.model ?? this.models.defaultWorkerModel,
+        count: w.count,
+      })),
+      defaultWorkerModel: this.models.defaultWorkerModel,
     });
   }
 
@@ -59,6 +69,13 @@ export class Pipeline {
         total: plan.signals.length,
         open: plan.signals.filter((s) => s.status === "open").length,
         done: plan.signals.filter((s) => s.status === "done" || s.status === "completed").length,
+      },
+      models: {
+        commander: this.models.commanderModel,
+        workers: this.models.workers.map(w =>
+          `${w.model ?? this.models.defaultWorkerModel} ×${w.count}`
+        ).join(" | "),
+        workerSpecs: this.models.workers,
       },
       workers,
       heartbeat: {
@@ -176,14 +193,8 @@ export class Pipeline {
     // Write initial status
     this.writeStatusFile(plan);
 
-    // Determine how many workers to launch based on parallel signals
-    const parallelSignals = plan.signals.filter((s) => !s.parentId).length;
-    const workerCount = Math.min(parallelSignals, this.config.maxWorkers ?? 3);
-
-    console.log(`[commander] Launching ${workerCount} OpenCode workers...`);
-    for (let i = 0; i < workerCount; i++) {
-      await this.launcher.launchWorker();
-    }
+    console.log(`[commander] Launching worker fleet...`);
+    await this.launcher.launchFleet();
 
     // Start heartbeat loops
     const commanderLoop = new CommanderLoop({

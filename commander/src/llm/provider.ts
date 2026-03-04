@@ -3,7 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 
 export interface LLMConfig {
-  provider: "azure-openai" | "anthropic";
+  provider: "azure-openai" | "anthropic" | "openai";
   model?: string;
 }
 
@@ -90,4 +90,13 @@ function getDefaultModel(provider: LLMConfig["provider"]): string {
     return process.env.ANTHROPIC_DEFAULT_SONNET_MODEL ?? "claude-sonnet-4-5";
   }
   return process.env.COMMANDER_LLM_MODEL ?? "gpt-5.3-codex";
+}
+
+export function configFromResolved(
+  resolved: import("../config/model-resolver.js").ResolvedModels,
+): LLMConfig {
+  return {
+    provider: resolved.commanderProvider,
+    model: resolved.commanderModel,
+  };
 }

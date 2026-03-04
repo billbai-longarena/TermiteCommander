@@ -7,16 +7,23 @@ const execFileAsync = promisify(execFile);
 
 export interface OpenCodeWorker {
   id: string;
+  model: string;
   sessionId: string | null;
   process: ChildProcess | null;
   startedAt: Date;
   status: "running" | "stopped" | "errored" | "idle";
 }
 
+export interface WorkerModelSpec {
+  model: string;
+  count: number;
+}
+
 export interface LauncherConfig {
   colonyRoot: string;
   skillSourceDir: string;
-  maxWorkers: number;
+  workerSpecs: WorkerModelSpec[];
+  defaultWorkerModel: string;
 }
 
 export class OpenCodeLauncher {
@@ -86,15 +93,16 @@ export class OpenCodeLauncher {
    * Launch an OpenCode worker using `opencode run` (non-interactive mode).
    * The first call creates a new session; subsequent pulses continue it.
    */
-  async launchWorker(workerId?: string): Promise<OpenCodeWorker> {
+  async launchWorker(model?: string, workerId?: string): Promise<OpenCodeWorker> {
     const id = workerId ?? `termite-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-
-    if (this.workers.size >= this.config.maxWorkers) {
-      throw new Error(`Max workers (${this.config.maxWorkers}) reached`);
+    const totalMax = this.config.workerSpecs.reduce((sum, s) => sum + s.count, 0);
+    if (this.workers.size >= totalMax) {
+      throw new Error(`Max workers (${totalMax}) reached`);
     }
 
     const worker: OpenCodeWorker = {
       id,
+      model: model ?? this.config.defaultWorkerModel,
       sessionId: null,
       process: null,
       startedAt: new Date(),
@@ -102,12 +110,19 @@ export class OpenCodeLauncher {
     };
     this.workers.set(id, worker);
 
-    console.log(`[launcher] Starting OpenCode worker: ${id}`);
+    console.log(`[launcher] Starting worker: ${id} (model: ${worker.model})`);
 
-    // Launch with opencode run — non-interactive, single message
     await this.runOpenCode(worker, "白蚁协议");
 
     return worker;
+  }
+
+  async launchFleet(): Promise<void> {
+    for (const spec of this.config.workerSpecs) {
+      for (let i = 0; i < spec.count; i++) {
+        await this.launchWorker(spec.model);
+      }
+    }
   }
 
   /**
