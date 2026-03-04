@@ -26,6 +26,17 @@ export interface StallStatus {
   claimedSignals: number;
 }
 
+export interface SignalDetail {
+  id: string;
+  type: string;
+  title: string;
+  status: string;
+  weight: number;
+  claimedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export class SignalBridge {
   readonly colonyRoot: string;
   private scriptsDir: string;
@@ -100,6 +111,27 @@ export class SignalBridge {
       done: done || 0,
       blocked: 0,
     };
+  }
+
+  async listSignals(): Promise<SignalDetail[]> {
+    const script = `${this.dbPreamble()} && sqlite3 -separator '|' "$PROJECT_ROOT/.termite/termite.db" "SELECT id, type, title, status, weight, claimed_by, created_at, updated_at FROM signals ORDER BY CASE status WHEN 'open' THEN 2 WHEN 'claimed' THEN 1 ELSE 3 END, created_at ASC"`;
+
+    const result = await this.exec("bash", ["-c", script]);
+    if (result.exitCode !== 0 || !result.stdout.trim()) return [];
+
+    return result.stdout.split("\n").filter(Boolean).map((line) => {
+      const [id, type, title, status, weight, claimedBy, createdAt, updatedAt] = line.split("|");
+      return {
+        id: id ?? "",
+        type: type ?? "",
+        title: title ?? "",
+        status: status ?? "open",
+        weight: parseInt(weight ?? "0", 10),
+        claimedBy: claimedBy ?? "",
+        createdAt: createdAt ?? "",
+        updatedAt: updatedAt ?? "",
+      };
+    });
   }
 
   async createSignal(params: {
