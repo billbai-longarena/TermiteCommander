@@ -1,5 +1,5 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
-import { existsSync, copyFileSync, mkdirSync } from "node:fs";
+import { existsSync, copyFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -28,21 +28,58 @@ export class OpenCodeLauncher {
   }
 
   /**
+   * Recursively copy a directory tree.
+   */
+  private copyDirRecursive(src: string, dest: string): void {
+    mkdirSync(dest, { recursive: true });
+    for (const entry of readdirSync(src)) {
+      const srcPath = join(src, entry);
+      const destPath = join(dest, entry);
+      if (statSync(srcPath).isDirectory()) {
+        this.copyDirRecursive(srcPath, destPath);
+      } else {
+        copyFileSync(srcPath, destPath);
+      }
+    }
+  }
+
+  /**
    * Install termite skill files into the colony so OpenCode can discover them.
+   * Also installs Commander OpenCode skill and Claude Code plugin.
    */
   installSkills(): void {
-    const destDir = join(this.config.colonyRoot, ".opencode", "skill", "termite");
-    mkdirSync(destDir, { recursive: true });
+    // 1. Existing: copy termite protocol skills → .opencode/skill/termite/
+    const termiteDest = join(this.config.colonyRoot, ".opencode", "skill", "termite");
+    mkdirSync(termiteDest, { recursive: true });
 
     const files = ["SKILL.md", "arrive.md", "deposit.md", "molt.md"];
     for (const file of files) {
       const src = join(this.config.skillSourceDir, file);
-      const dst = join(destDir, file);
+      const dst = join(termiteDest, file);
       if (existsSync(src)) {
         copyFileSync(src, dst);
       }
     }
-    console.log(`[launcher] Installed termite skills to ${destDir}`);
+    console.log(`[launcher] Installed termite skills to ${termiteDest}`);
+
+    // Resolve plugins base dir (relative to skillSourceDir: ../plugins)
+    const pluginsBase = resolve(this.config.skillSourceDir, "../../plugins");
+
+    // 2. Copy OpenCode commander skill → .opencode/skill/commander/
+    const opencodeSrc = join(pluginsBase, "opencode");
+    if (existsSync(opencodeSrc)) {
+      const opencodeDest = join(this.config.colonyRoot, ".opencode", "skill", "commander");
+      this.copyDirRecursive(opencodeSrc, opencodeDest);
+      console.log(`[launcher] Installed commander skill to ${opencodeDest}`);
+    }
+
+    // 3. Copy Claude Code plugin → .claude/plugins/termite-commander/
+    const claudeCodeSrc = join(pluginsBase, "claude-code");
+    if (existsSync(claudeCodeSrc)) {
+      const claudeCodeDest = join(this.config.colonyRoot, ".claude", "plugins", "termite-commander");
+      this.copyDirRecursive(claudeCodeSrc, claudeCodeDest);
+      console.log(`[launcher] Installed Claude Code plugin to ${claudeCodeDest}`);
+    }
   }
 
   /**

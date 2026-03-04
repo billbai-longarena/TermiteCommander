@@ -16,6 +16,9 @@ Thumbs.db
 .birth
 .pheromone
 .commander-pulse
+.commander-status.json
+.commander.log
+.commander-nohup-pid
 .field-breath
 commander.lock
 colony.lock

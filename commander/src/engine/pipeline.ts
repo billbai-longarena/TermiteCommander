@@ -1,3 +1,5 @@
+import { writeFileSync, unlinkSync, existsSync } from "node:fs";
+import { join } from "node:path";
 import { TaskClassifier } from "./classifier.js";
 import { SignalDecomposer, type DecomposedSignal } from "./decomposer.js";
 import { SignalBridge } from "../colony/signal-bridge.js";
@@ -28,6 +30,54 @@ export class Pipeline {
       skillSourceDir: config.skillSourceDir,
       maxWorkers: config.maxWorkers ?? 3,
     });
+  }
+
+  private writeLockFile(objective: string): void {
+    const lockPath = join(this.config.colonyRoot, "commander.lock");
+    const data = {
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      objective,
+    };
+    writeFileSync(lockPath, JSON.stringify(data, null, 2), "utf-8");
+  }
+
+  private writeStatusFile(plan: Plan): void {
+    const statusPath = join(this.config.colonyRoot, ".commander-status.json");
+    const workers = this.launcher.getWorkers().map((w) => ({
+      id: w.id,
+      status: w.status,
+      sessionId: w.sessionId,
+      startedAt: w.startedAt.toISOString(),
+    }));
+    const data = {
+      updatedAt: new Date().toISOString(),
+      pid: process.pid,
+      objective: plan.objective,
+      taskType: plan.taskType,
+      signals: {
+        total: plan.signals.length,
+        open: plan.signals.filter((s) => s.status === "open").length,
+        done: plan.signals.filter((s) => s.status === "done" || s.status === "completed").length,
+      },
+      workers,
+      heartbeat: {
+        activeWorkers: this.launcher.activeCount(),
+        runningWorkers: this.launcher.runningCount(),
+      },
+    };
+    writeFileSync(statusPath, JSON.stringify(data, null, 2), "utf-8");
+  }
+
+  private cleanupLockFile(): void {
+    const lockPath = join(this.config.colonyRoot, "commander.lock");
+    try {
+      if (existsSync(lockPath)) {
+        unlinkSync(lockPath);
+      }
+    } catch {
+      // Best-effort cleanup
+    }
   }
 
   async plan(objective: string): Promise<Plan> {
@@ -138,10 +188,16 @@ export class Pipeline {
   }
 
   async runWithHeartbeats(plan: Plan): Promise<void> {
+    // Write lock file to indicate Commander is running
+    this.writeLockFile(plan.objective);
+
     await this.dispatch(plan);
 
     // Install termite skills into colony
     this.launcher.installSkills();
+
+    // Write initial status
+    this.writeStatusFile(plan);
 
     // Determine how many workers to launch based on parallel signals
     const parallelSignals = plan.signals.filter((s) => !s.parentId).length;
@@ -159,10 +215,12 @@ export class Pipeline {
       stallThreshold: 10,
       onCycle: (snap) => {
         console.log(`[commander-hb] open=${snap.openSignals} claimed=${snap.claimedSignals} commits=${snap.newCommits} workers=${this.launcher.activeCount()}`);
+        this.writeStatusFile(plan);
       },
       onHalt: (info) => {
         console.log(`[commander] HALTED: ${info.reason}. Stopping workers...`);
         this.launcher.stopAll();
+        this.cleanupLockFile();
       },
     });
 
@@ -181,17 +239,22 @@ export class Pipeline {
         console.log(`[colony] Stopped: ${reason}`);
         this.launcher.stopAll();
         commanderLoop.stop();
+        this.cleanupLockFile();
       },
     });
 
-    // Handle process exit
-    process.on("SIGINT", () => {
+    // Handle process exit — cleanup lock on SIGINT and SIGTERM
+    const cleanup = () => {
       console.log("\n[commander] Interrupted. Stopping...");
       this.launcher.stopAll();
       commanderLoop.stop();
       colonyLoop.stop();
+      this.cleanupLockFile();
       process.exit(0);
-    });
+    };
+
+    process.on("SIGINT", cleanup);
+    process.on("SIGTERM", cleanup);
 
     await Promise.all([
       commanderLoop.start(),

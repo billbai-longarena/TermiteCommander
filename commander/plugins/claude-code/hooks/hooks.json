@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "bash \"$CLAUDE_PLUGIN_DIR/scripts/hook-session-start.sh\"",
+        "timeout": 5000
+      }
+    ]
+  }
+}
