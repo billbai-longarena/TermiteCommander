@@ -1,0 +1,42 @@
+node_modules/
+dist/
+*.tgz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Runtime artifacts (generated in colony, not in source repo)
+.birth
+.pheromone
+.commander-pulse
+.field-breath
+commander.lock
+colony.lock
+HALT.md
+WIP.md
+PLAN.md
+DIRECTIVE.md
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.*
+
+# Package manager
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
