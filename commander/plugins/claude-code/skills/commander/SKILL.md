@@ -1,114 +1,138 @@
 ---
 name: commander
-description: Invoke Termite Commander to plan, orchestrate, monitor, and stop colony-based autonomous work
+description: |
+  Decompose plans into atomic signals for termite colony execution. Invoke when user says:
+  /commander, 让蚁群干活, 让白蚁施工, dispatch to colony, termite protocol execute,
+  开始施工, 让白蚁协议干活, start colony work, deploy termites
 user_invocable: true
 ---
 
-# Termite Commander Skill
+# Termite Commander — Signal Decomposition & Colony Orchestration
 
-You are orchestrating work through **Termite Commander** — an autonomous engine that decomposes objectives into signals, dispatches them to a colony of workers, and monitors progress via heartbeats.
+You are orchestrating work through **Termite Commander** — an engine that decomposes objectives into atomic signals that weak models can execute, then dispatches them to a colony of workers.
+
+## When to Use
+
+- User has a plan/design ready and wants the colony to execute it
+- User says "让蚁群干活", "开始施工", "deploy termites", etc.
+- **NOT** for research, analysis, or design — do those yourself first, then hand off to Commander
+
+## Signal Decomposition Standards for Weak Models
+
+Commander decomposes work into signals that haiku-class models can execute. When preparing context for Commander, ensure the design is specific enough for these standards:
+
+### What Makes a Good Signal:
+- **Atomic**: one clear action, one file/module, completable in a single session
+- **Self-contained**: title + nextHint contain ALL context needed (file paths, function names, expected behavior)
+- **Verifiable**: explicit acceptance criteria the model can check itself
+- **Specific paths**: exact file paths specified, weak models don't guess well
+- **Flat dependencies**: max depth 3, maximize parallelism
+
+### Bad vs Good Signals:
+```
+BAD:  "Implement authentication" (too broad, haiku can't plan this)
+GOOD: "Create src/middleware/auth.ts: JWT verification middleware that checks
+       Authorization header, verifies with process.env.JWT_SECRET, calls next()
+       on success or returns 401. Use jsonwebtoken library."
+
+BAD:  "Optimize database queries" (vague, no specific target)
+GOOD: "Add Redis cache to src/api/users.ts getUsers(): TTL 300s, key format
+       users:page:{n}. Return cached data on hit. Test: repeated request <10ms."
+```
 
 ## Commands
 
-Parse the user's intent into one of these actions:
+### Start Colony Work
 
-### `plan <objective>`
-Generate a plan from a natural-language objective.
+Two ways to provide design context:
 
+**Option A: From a design document**
 ```bash
-termite-commander plan "<objective>" --colony "$PWD"
+nohup termite-commander plan "<objective>" --plan PLAN.md --colony "$PWD" --run > .commander.log 2>&1 &
 ```
 
-Add `--dispatch` to send signals immediately, or `--run` to start full execution with workers and heartbeats (runs in background via nohup):
-
+**Option B: From conversation context**
+Summarize the current design into a text block, then:
 ```bash
-nohup termite-commander plan "<objective>" --colony "$PWD" --run > .commander.log 2>&1 &
-echo $! > .commander-nohup-pid
+nohup termite-commander plan "<objective>" --context "<design summary>" --colony "$PWD" --run > .commander.log 2>&1 &
 ```
 
-### `status`
-Show current Commander and colony status.
-
+### Check Status
 ```bash
 termite-commander status --colony "$PWD"
-```
-
-For machine-readable output:
-```bash
 termite-commander status --colony "$PWD" --json
 ```
 
-If Commander is not running, read `.commander-status.json` directly for the last known state:
-```bash
-cat .commander-status.json 2>/dev/null || echo "No status file found"
-```
-
-### `stop`
-Stop a running Commander process gracefully.
-
-```bash
-termite-commander stop --colony "$PWD"
-```
-
-### `workers`
-Show worker status table.
-
+### Show Workers
 ```bash
 termite-commander workers --colony "$PWD"
 ```
 
-For JSON output:
+### Stop
 ```bash
-termite-commander workers --colony "$PWD" --json
+termite-commander stop --colony "$PWD"
 ```
 
-### `resume`
-Resume from a halted state (clears HALT.md).
-
+### Resume
 ```bash
 termite-commander resume --colony "$PWD"
 ```
 
-After resume, re-run with a new or same objective:
+### Watch (live monitoring in terminal)
 ```bash
-nohup termite-commander plan "<objective>" --colony "$PWD" --run > .commander.log 2>&1 &
+termite-commander watch --colony "$PWD"
 ```
 
-### `watch`
-Real-time colony monitoring.
-
+Or launch the read-only TUI dashboard:
 ```bash
-termite-commander watch --colony "$PWD" --interval 5000
+termite-commander
 ```
 
-## Dashboard Format
+## Model Configuration
 
-When presenting status to the user, format as:
+Commander reads model config from environment variables and opencode.json:
 
+**Commander model** (strong, for signal decomposition):
+```bash
+export COMMANDER_MODEL=claude-sonnet-4-5
 ```
-== Commander Dashboard ==
-Status:    RUNNING | HALTED | STOPPED
-Objective: <objective text>
-Started:   <timestamp>
 
-Signals:   X/Y done (Z claimed)
-Workers:   A active, B running
+**Worker models** (weak/mixed, for execution):
+```bash
+# Uniform: 3 workers with same model
+export TERMITE_WORKERS=3
+export TERMITE_MODEL=claude-haiku-3-5
 
-[Worker Table if requested]
+# Mixed: different models
+export TERMITE_WORKERS=sonnet:1,haiku:2,gemini-flash:1
+```
+
+Or configure in `opencode.json`:
+```json
+{
+  "model": "anthropic/claude-sonnet-4-5",
+  "small_model": "anthropic/claude-haiku-3-5",
+  "commander": {
+    "workers": [
+      { "model": "anthropic/claude-sonnet-4-5", "count": 1 },
+      { "model": "anthropic/claude-haiku-3-5", "count": 2 }
+    ]
+  }
+}
 ```
 
 ## Routing Logic
 
-1. If the user says "plan ..." or "start ..." → `plan` (with `--run` if they want execution)
-2. If the user says "status" or "how's it going" → `status`
-3. If the user says "stop" or "halt" or "kill" → `stop`
-4. If the user says "workers" or "who's working" → `workers`
-5. If the user says "resume" or "continue" → `resume`
-6. If the user says "watch" or "monitor" → `watch`
+1. User says "plan/start/施工/干活/deploy" + objective → **Start Colony Work**
+2. User says "status/进度/怎么样" → **Check Status**
+3. User says "stop/halt/停/暂停" → **Stop**
+4. User says "workers/工人/谁在工作" → **Show Workers**
+5. User says "resume/continue/继续" → **Resume**
+6. User says "configure model/配置模型" → **Model Configuration** guidance
 
 ## Important Notes
 
-- Commander runs as a background process (`nohup`). The PID is stored in `commander.lock`.
-- Status snapshots are written to `.commander-status.json` on every heartbeat cycle.
-- If `commander.lock` exists but the process is dead, the lock is stale — inform the user and clean up.
-- Always use `--colony "$PWD"` to ensure correct colony root.
+- Commander runs as a background process (`nohup`). PID stored in `commander.lock`.
+- Status snapshots written to `.commander-status.json` on every heartbeat cycle.
+- Use `termite-commander` (no args) to open read-only TUI dashboard in a separate terminal.
+- Commander does NOT do research or design — that's your job. Commander only decomposes and orchestrates.

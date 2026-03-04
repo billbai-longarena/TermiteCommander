@@ -1,47 +1,53 @@
 ---
 name: commander
-description: Termite Commander — plan, orchestrate, monitor, and stop colony work
+description: |
+  Termite Commander — decompose plans into atomic signals for colony execution.
+  Trigger: /commander, 让蚁群干活, 让白蚁施工, 开始施工, deploy termites
 ---
 
-# Commander
+# Commander — Signal Decomposition & Colony Orchestration
 
-Autonomous orchestration engine. Decomposes objectives → signals → workers → heartbeat monitoring.
+Decomposes objectives into atomic signals that weak models (haiku-class) can execute, then dispatches to a termite colony.
 
 ## Actions
 
 | Intent | Command |
 |--------|---------|
-| Plan + run | `nohup termite-commander plan "<obj>" --colony "$PWD" --run > .commander.log 2>&1 &` |
-| Plan only | `termite-commander plan "<obj>" --colony "$PWD"` |
+| Plan + run (with design doc) | `nohup termite-commander plan "<obj>" --plan PLAN.md --colony "$PWD" --run > .commander.log 2>&1 &` |
+| Plan + run (with context) | `nohup termite-commander plan "<obj>" --context "<summary>" --colony "$PWD" --run > .commander.log 2>&1 &` |
 | Status | `termite-commander status --colony "$PWD"` |
 | Status JSON | `termite-commander status --colony "$PWD" --json` |
 | Workers | `termite-commander workers --colony "$PWD"` |
 | Stop | `termite-commander stop --colony "$PWD"` |
 | Resume | `termite-commander resume --colony "$PWD"` |
-| Watch | `termite-commander watch --colony "$PWD"` |
+| TUI Dashboard | `termite-commander` |
+
+## Signal Standards for Weak Models
+
+Signals must be:
+- **Atomic**: one action, one file, single session
+- **Self-contained**: all context in title + nextHint
+- **Verifiable**: explicit acceptance criteria
+- **Specific**: exact file paths, no guessing
+- **Flat**: max depth 3, maximize parallelism
+
+## Model Config
+
+```bash
+# Commander (strong model for decomposition)
+export COMMANDER_MODEL=claude-sonnet-4-5
+
+# Workers (uniform)
+export TERMITE_WORKERS=3
+export TERMITE_MODEL=claude-haiku-3-5
+
+# Workers (mixed)
+export TERMITE_WORKERS=sonnet:1,haiku:2,gemini-flash:1
+```
+
+Falls back to `opencode.json` fields: `model`, `small_model`, `commander.workers`.
 
 ## Status Files
 
 - `commander.lock` — `{ pid, startedAt, objective }`. Presence = Commander running.
-- `.commander-status.json` — heartbeat snapshot: signal counts, worker states, timestamps.
-
-## Quick Check
-
-```bash
-# Is Commander running?
-if [ -f commander.lock ]; then
-  PID=$(grep -o '"pid":[0-9]*' commander.lock | grep -o '[0-9]*')
-  kill -0 "$PID" 2>/dev/null && echo "Running (PID $PID)" || echo "Stale lock"
-else
-  echo "Not running"
-fi
-```
-
-## Dashboard
-
-```
-Commander: RUNNING (PID XXXX)
-Objective: <text>
-Signals:   X/Y done
-Workers:   A active
-```
+- `.commander-status.json` — heartbeat snapshot: signal counts, worker states, model info.
