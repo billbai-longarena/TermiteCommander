@@ -34,7 +34,13 @@ commander/
     colony/plan-writer.ts    # PLAN.md generation
     colony/halt-writer.ts    # HALT.md generation
     heartbeat/               # Commander + Colony loops, circuit breaker
-    index.ts                 # CLI entry point
+    tui/                     # Ink/React TUI (REPL + dashboard + detail views)
+      App.tsx                # Root component, view routing
+      views/                 # REPLView, DashboardView, DetailView
+      components/            # CommandPrompt, Dashboard, ProgressBar, SignalTable, WorkerTable, etc.
+      hooks/                 # useColonyState (polling), usePipelineStreaming (plan execution)
+      utils/                 # commandParser, colonyReader, formatters
+    index.ts                 # CLI entry point (no args → TUI, with subcommand → CLI)
   skills/termite/            # Termite protocol skills (arrive, deposit, molt)
   plugins/
     claude-code/             # Claude Code plugin (hooks, skills, scripts)
@@ -51,6 +57,7 @@ commander/
 ## CLI
 
 ```bash
+termite-commander                  # No args → enter interactive TUI (REPL + dashboard)
 termite-commander plan "<objective>" --colony <path> [--dispatch] [--run]
 termite-commander status --colony <path> [--json]
 termite-commander workers --colony <path> [--json]
@@ -58,6 +65,14 @@ termite-commander stop --colony <path>
 termite-commander resume --colony <path>
 termite-commander watch --colony <path> [--interval <ms>]
 ```
+
+### TUI Views
+
+- REPL: conversational input, planning progress, command history
+- Dashboard: signal progress bar, worker status, colony overview
+- Signal Table: full signal list (ID, Type, Title, Status, Worker)
+- Worker Table: worker details (ID, Status, Session, Duration)
+- View switching: `d` dashboard / `s` signals / `w` workers / `r` repl / `q` quit
 
 ## Build & Test
 
@@ -70,7 +85,8 @@ npx vitest run         # 21 tests
 
 ## Conventions
 
-- TypeScript strict mode, ESM (ES2022 target)
+- TypeScript strict mode, ESM (ES2022 target), JSX via react-jsx
+- TUI: Ink 5 + React 18 (ink-text-input, ink-spinner)
 - LLM provider: Anthropic (default) or Azure OpenAI
 - Worker platform: OpenCode (`opencode run`)
 - Signals use SQLite (via colony's termite-db.sh)
