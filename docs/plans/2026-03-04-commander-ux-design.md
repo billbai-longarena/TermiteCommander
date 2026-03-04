@@ -394,3 +394,53 @@ For stop:
 | P3 | Dashboard 模板预制 | 总览/信号/工人三种视图 |
 
 建议先做 P0（两个 skill），因为这立刻就能让当前体验完整闭环。P1-P3 是 Commander 独立使用时的体验增强。
+
+---
+
+## 8. 实现记录
+
+**日期**: 2026-03-04
+
+### P0: Claude Code Plugin + OpenCode Skill — DONE
+
+- `plugins/claude-code/`: plugin.json, hooks.json (SessionStart), SKILL.md, lib.sh, hook-session-start.sh
+- `plugins/opencode/`: SKILL.md
+
+### P1: Commander REPL — DONE
+
+- `src/tui/index.tsx` — TUI 入口，Ink render
+- `src/tui/App.tsx` — 根组件，视图路由 (repl/dashboard/signals/workers)
+- `src/tui/views/REPLView.tsx` — 对话式交互：命令输入 + 规划进度 + 历史记录
+- `src/tui/components/CommandPrompt.tsx` — ink-text-input 输入框
+- `src/tui/components/PlanningProgress.tsx` — Phase 0-5 实时进度 (spinner/checkmark)
+- `src/tui/hooks/usePipelineStreaming.ts` — Pipeline.plan() 包装器，console.log 截获
+- `src/tui/utils/commandParser.ts` — 自然语言 → 命令解析（中英文支持）
+- `src/index.ts` — 修改：无子命令时进入 TUI 模式
+
+入口: `termite-commander` (无参数) → 进入 REPL
+
+### P2: TUI Dashboard — DONE
+
+- `src/tui/views/DashboardView.tsx` — 实时监控仪表盘
+- `src/tui/components/Dashboard.tsx` — 总览布局：进度条 + 工人状态 + 信号统计
+- `src/tui/components/ProgressBar.tsx` — `████████░░░░ 7/13 (54%)`
+- `src/tui/components/WorkerStatus.tsx` — `●●●○ 3 running, 1 idle`
+- `src/tui/components/ActivityFeed.tsx` — 最近信号活动列表
+- `src/tui/hooks/useColonyState.ts` — 轮询 SignalBridge + 读取 lock/status 文件
+- `src/tui/utils/colonyReader.ts` — commander.lock / .commander-status.json 读取
+- `src/tui/utils/formatters.ts` — 时间/百分比/进度条格式化
+
+### P3: Dashboard 模板 — DONE
+
+- `src/tui/views/DetailView.tsx` — 信号/工人详情视图切换
+- `src/tui/components/SignalTable.tsx` — 信号列表表格 (ID/Type/Title/Status/Worker)
+- `src/tui/components/WorkerTable.tsx` — 工人状态表格 (ID/Status/Session/Duration)
+
+视图切换快捷键: `d` dashboard / `s` signals / `w` workers / `r` repl / `q` quit
+
+### 技术栈
+
+- Ink 5 + React 18 (Terminal UI)
+- ink-text-input (输入框)
+- ink-spinner (加载动画)
+- TypeScript + ESM + JSX (react-jsx)

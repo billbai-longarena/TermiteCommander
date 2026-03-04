@@ -215,4 +215,13 @@ program
     }
   });
 
-program.parse();
+// If no subcommand provided, enter TUI mode
+const knownCommands = ["plan", "status", "resume", "watch", "stop", "workers", "help", "-h", "--help", "-V", "--version"];
+const hasSubcommand = process.argv.length > 2 && knownCommands.some((cmd) => process.argv[2] === cmd);
+
+if (process.argv.length <= 2 || !hasSubcommand) {
+  const { startTUI } = await import("./tui/index.js");
+  await startTUI(process.cwd());
+} else {
+  program.parse();
+}
