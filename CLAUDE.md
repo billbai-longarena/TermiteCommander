@@ -57,6 +57,7 @@ commander/
 
 ```bash
 termite-commander                  # No args → read-only TUI dashboard
+termite-commander install --colony <path>  # Install skills into project
 termite-commander plan "<objective>" --colony <path> [--plan <file>] [--context <text>] [--dispatch] [--run]
 termite-commander status --colony <path> [--json]
 termite-commander workers --colony <path> [--json]

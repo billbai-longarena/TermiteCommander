@@ -18,6 +18,25 @@ program
   .version("0.1.0");
 
 program
+  .command("install")
+  .description("Install Commander skills into current project (Claude Code plugin + OpenCode skill)")
+  .option("-c, --colony <path>", "Project root directory", process.cwd())
+  .action(async (opts: { colony: string }) => {
+    const { OpenCodeLauncher } = await import("./colony/opencode-launcher.js");
+    const launcher = new OpenCodeLauncher({
+      colonyRoot: opts.colony,
+      skillSourceDir: resolve(import.meta.dirname ?? ".", "../skills/termite"),
+      workerSpecs: [],
+      defaultWorkerModel: "",
+    });
+    launcher.installSkills();
+    console.log("\nCommander skills installed. Available commands:");
+    console.log("  Claude Code: /commander <objective>");
+    console.log("  OpenCode:    /commander <objective>");
+    console.log("\nTrigger phrases: /commander, 让蚁群干活, 让白蚁施工, deploy termites");
+  });
+
+program
   .command("plan <objective>")
   .description("Plan and decompose an objective into colony signals")
   .option("-c, --colony <path>", "Colony root directory", process.cwd())
@@ -44,6 +63,8 @@ program
     plan.signals.forEach((s) => console.log(`  ${s.id} [${s.type}] ${s.title}`));
 
     if (opts.run) {
+      console.log("\n[commander] Starting colony execution...");
+      console.log("[commander] Open another terminal and run 'termite-commander' for the live dashboard.");
       await pipeline.runWithHeartbeats(plan);
     } else if (opts.dispatch) {
       await pipeline.dispatch(plan);

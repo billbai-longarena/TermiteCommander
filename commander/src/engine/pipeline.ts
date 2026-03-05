@@ -181,7 +181,76 @@ export class Pipeline {
     console.log("[commander] Signals dispatched to colony.");
   }
 
+  /**
+   * Ensure Termite Protocol is installed in the colony.
+   * If scripts/termite-db.sh is missing, run install.sh from the protocol source.
+   */
+  async ensureProtocol(): Promise<void> {
+    const dbScript = join(this.config.colonyRoot, "scripts", "termite-db.sh");
+    if (existsSync(dbScript)) {
+      console.log("[commander] Termite Protocol detected.");
+      return;
+    }
+
+    console.log("[commander] Termite Protocol not found. Installing...");
+    // Look for install.sh relative to commander package
+    const installScript = join(
+      this.config.skillSourceDir,
+      "../../../TermiteProtocol/install.sh",
+    );
+    if (!existsSync(installScript)) {
+      console.error(
+        "[commander] Cannot find TermiteProtocol/install.sh. " +
+          "Please install the Termite Protocol manually:\n" +
+          "  bash /path/to/TermiteProtocol/install.sh " +
+          this.config.colonyRoot,
+      );
+      throw new Error("Termite Protocol not installed");
+    }
+
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("bash", [installScript, this.config.colonyRoot], {
+      stdio: "inherit",
+    });
+    console.log("[commander] Termite Protocol installed.");
+  }
+
+  /**
+   * Ensure colony is initialized (has .birth file).
+   * Runs field-arrive.sh if .birth is missing.
+   */
+  async ensureGenesis(): Promise<void> {
+    const birthFile = join(this.config.colonyRoot, ".birth");
+    if (existsSync(birthFile)) {
+      return;
+    }
+
+    const arriveScript = join(
+      this.config.colonyRoot,
+      "scripts",
+      "field-arrive.sh",
+    );
+    if (!existsSync(arriveScript)) {
+      console.warn("[commander] field-arrive.sh not found, skipping genesis.");
+      return;
+    }
+
+    console.log("[commander] Running colony genesis (field-arrive.sh)...");
+    const result = await this.bridge.exec("bash", [arriveScript]);
+    if (result.exitCode === 0) {
+      console.log("[commander] Colony genesis complete.");
+    } else {
+      console.warn(
+        `[commander] field-arrive.sh exited with code ${result.exitCode}: ${result.stderr}`,
+      );
+    }
+  }
+
   async runWithHeartbeats(plan: Plan): Promise<void> {
+    // Ensure protocol + genesis before starting
+    await this.ensureProtocol();
+    await this.ensureGenesis();
+
     // Write lock file to indicate Commander is running
     this.writeLockFile(plan.objective);
 

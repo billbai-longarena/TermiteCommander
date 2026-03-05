@@ -34,35 +34,148 @@ TUI Dashboard:      Watch progress in real-time
 ### Prerequisites
 
 - Node.js 22+
-- [Termite Protocol](https://github.com/billbai-longarena/Termite-Protocol) installed in your project
 - [OpenCode](https://github.com/nicepkg/opencode) for worker execution
-- An LLM API key (Anthropic or Azure OpenAI)
+- An LLM API key (Anthropic recommended: `ANTHROPIC_API_KEY`)
 
-### Install
+> Termite Protocol is auto-installed by Commander if not present.
+
+### Install Commander
 
 ```bash
 git clone https://github.com/billbai-longarena/TermiteCommander.git
 cd TermiteCommander/commander
-npm install
-npm run build
-npm link  # global install as 'termite-commander'
+npm install && npm run build && npm link
 ```
 
-### Basic Usage
+---
+
+## Complete Workflow: From Zero to Colony Execution
+
+### Step 1: Enter your project and launch Claude Code (or OpenCode)
 
 ```bash
-# 1. Install Termite Protocol in your project
-bash /path/to/TermiteProtocol/install.sh ~/your-project
+cd ~/your-project
+claude   # or: opencode
+```
 
-# 2. Initialize the colony
-cd ~/your-project && ./scripts/field-arrive.sh
+### Step 2: Install Commander skills into the project
 
-# 3. Decompose a plan and start the colony
-termite-commander plan "Implement OAuth2 authentication system" \
-  --plan PLAN.md --colony . --run
+In Claude Code, or in a terminal:
 
-# 4. Watch progress (in another terminal)
+```bash
+termite-commander install --colony .
+```
+
+This installs:
+- `.claude/plugins/termite-commander/` — Claude Code plugin (hooks + skill)
+- `.opencode/skill/commander/` — OpenCode skill
+- `.opencode/skill/termite/` — Termite protocol skills for workers
+
+After this, Claude Code recognizes `/commander` and natural language triggers like "让蚁群干活".
+
+### Step 3: Design in Claude Code
+
+Use Claude Code normally to design your feature:
+
+```
+> Help me design an OAuth2 authentication system for this Express app.
+> Write the architecture plan to PLAN.md.
+```
+
+Claude Code does the research, analysis, and design — this is its strength. Take your time here. The quality of the design directly determines the quality of colony output.
+
+### Step 4: Configure worker models (optional)
+
+Set environment variables before starting Commander:
+
+```bash
+# Strong model for signal decomposition (default: claude-sonnet-4-5)
+export COMMANDER_MODEL=claude-sonnet-4-5
+
+# Worker fleet (default: 3 × claude-haiku-3-5)
+export TERMITE_WORKERS=sonnet:1,haiku:2
+# Or uniform: TERMITE_WORKERS=3 and TERMITE_MODEL=claude-haiku-3-5
+```
+
+Or configure in `opencode.json` (persisted):
+
+```json
+{
+  "model": "anthropic/claude-sonnet-4-5",
+  "small_model": "anthropic/claude-haiku-3-5",
+  "commander": {
+    "workers": [
+      { "model": "anthropic/claude-sonnet-4-5", "count": 1 },
+      { "model": "anthropic/claude-haiku-3-5", "count": 2 }
+    ]
+  }
+}
+```
+
+### Step 5: Start Commander
+
+In Claude Code:
+
+```
+> /commander 按照PLAN.md开始施工
+```
+
+Or natural language:
+
+```
+> 让蚁群按照设计开始干活
+> deploy termites with the plan
+```
+
+Or directly in terminal:
+
+```bash
+termite-commander plan "Implement OAuth2 authentication" --plan PLAN.md --colony . --run
+```
+
+**Commander automatically:**
+1. Detects if Termite Protocol is installed — if not, installs it
+2. Runs colony genesis (`field-arrive.sh`) if `.birth` doesn't exist
+3. Decomposes the plan into atomic signals (one strong-model LLM call)
+4. Dispatches signals to the colony SQLite DB
+5. Installs worker skills
+6. Launches the mixed-model worker fleet
+7. Starts dual heartbeat monitoring (Commander 60s + Colony 15-60s)
+
+### Step 6: Watch progress
+
+Open another terminal for the live dashboard:
+
+```bash
+cd ~/your-project
 termite-commander
+```
+
+The TUI shows:
+- Signal progress bar and full signal list (from DB)
+- Worker status with model labels
+- Recent git commits from workers
+- Heartbeat health
+
+Or check from Claude Code:
+
+```
+> /commander status
+> /commander workers
+```
+
+### Step 7: Colony completes
+
+When all signals are done, the circuit breaker halts Commander automatically:
+- Workers stop
+- `HALT.md` is generated with a summary
+- `commander.lock` is cleaned up
+
+Read the results in Claude Code:
+
+```
+> Read HALT.md and summarize what the colony accomplished
+> Review the changes in git log
 ```
 
 ---
@@ -71,6 +184,8 @@ termite-commander
 
 ```bash
 termite-commander                      # Read-only TUI dashboard
+termite-commander install              # Install skills into project
+  --colony <path>                      # Project root (default: cwd)
 termite-commander plan <objective>     # Decompose and optionally execute
   --plan <file>                        # Design document as context
   --context <text>                     # Direct text context
@@ -83,75 +198,6 @@ termite-commander stop                 # Stop Commander + workers
 termite-commander resume               # Clear HALT.md, restart
 termite-commander watch                # Real-time status polling
 ```
-
----
-
-## Model Configuration
-
-Commander uses a strong model for signal decomposition and weak models for worker execution.
-
-**Priority:** environment variables > `opencode.json` > defaults
-
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `COMMANDER_MODEL` | Strong model for signal decomposition | `claude-sonnet-4-5` |
-| `TERMITE_MODEL` | Default weak model for workers | `claude-haiku-3-5` |
-| `TERMITE_WORKERS` | Worker fleet spec | `3` (3x default model) |
-
-### Uniform Workers
-
-```bash
-export COMMANDER_MODEL=claude-sonnet-4-5
-export TERMITE_WORKERS=3
-export TERMITE_MODEL=claude-haiku-3-5
-```
-
-### Mixed-Model Fleet
-
-```bash
-export TERMITE_WORKERS=sonnet:1,haiku:2,gemini-flash:1
-```
-
-### Via opencode.json
-
-```json
-{
-  "model": "anthropic/claude-sonnet-4-5",
-  "small_model": "anthropic/claude-haiku-3-5",
-  "commander": {
-    "workers": [
-      { "model": "anthropic/claude-sonnet-4-5", "count": 1 },
-      { "model": "anthropic/claude-haiku-3-5", "count": 2 },
-      { "model": "google/gemini-3-flash", "count": 1 }
-    ]
-  }
-}
-```
-
----
-
-## Claude Code / OpenCode Integration
-
-Commander integrates as a skill in both platforms. After `npm link`, use it in Claude Code:
-
-```
-> /commander 按照PLAN.md开始施工
-> /commander status
-> /commander stop
-```
-
-Or natural language triggers:
-
-```
-> 让蚁群干活
-> 让白蚁协议执行这个设计
-> deploy termites
-```
-
-The skill guides your AI assistant to:
-1. Collect design context (from PLAN.md or conversation)
-2. Invoke `termite-commander plan ... --run` in background
-3. Report status and control workers
 
 ---
 
