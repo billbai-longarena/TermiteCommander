@@ -4,6 +4,8 @@ import { existsSync, copyFileSync, mkdirSync, readdirSync, statSync } from "node
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { WorkerRuntime } from "../config/model-resolver.js";
+import { NativeCliProvider } from "./providers/native-cli-provider.js";
+import { OpenClawProvider } from "./providers/openclaw-provider.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -19,21 +21,15 @@ const RUNTIME_BINARIES: Record<WorkerRuntime, string> = {
   opencode: "opencode",
   claude: "claude",
   codex: "codex",
+  openclaw: "openclaw",
 };
-
-const SESSION_ID_KEYS = new Set([
-  "sessionID",
-  "sessionId",
-  "session_id",
-  "conversation_id",
-  "conversationId",
-]);
 
 export interface OpenCodeWorker {
   id: string;
   cli: WorkerRuntime;
   model: string;
   sessionId: string | null;
+  runId: string | null;
   process: ChildProcess | null;
   startedAt: Date;
   status: "running" | "stopped" | "errored" | "idle";
@@ -56,9 +52,13 @@ export interface LauncherConfig {
 export class OpenCodeLauncher {
   private config: LauncherConfig;
   private workers: Map<string, OpenCodeWorker> = new Map();
+  private nativeCliProvider: NativeCliProvider;
+  private openClawProvider: OpenClawProvider;
 
   constructor(config: LauncherConfig) {
     this.config = config;
+    this.nativeCliProvider = new NativeCliProvider();
+    this.openClawProvider = new OpenClawProvider();
   }
 
   private copyDirRecursive(src: string, dest: string): void {
@@ -148,6 +148,7 @@ export class OpenCodeLauncher {
       cli: cli ?? this.config.defaultWorkerCli,
       model: model ?? this.config.defaultWorkerModel,
       sessionId: null,
+      runId: null,
       process: null,
       startedAt: new Date(),
       status: "idle",
@@ -211,6 +212,9 @@ export class OpenCodeLauncher {
 
   private async runWorker(worker: OpenCodeWorker, prompt: string): Promise<void> {
     switch (worker.cli) {
+      case "openclaw":
+        await this.runOpenClaw(worker, prompt);
+        return;
       case "claude":
         await this.runClaude(worker, prompt);
         return;
@@ -223,50 +227,57 @@ export class OpenCodeLauncher {
     }
   }
 
+  private async runOpenClaw(worker: OpenCodeWorker, prompt: string): Promise<void> {
+    const agentId = worker.model && !worker.model.includes("/") ? worker.model : undefined;
+
+    const spec = await this.openClawProvider.buildStartSpec({
+      workspace: this.config.colonyRoot,
+      prompt,
+      route: {
+        // Keep openclaw invocation valid even when no explicit route is configured.
+        sessionId: worker.sessionId ?? randomUUID(),
+        agent: agentId,
+      },
+      local: false,
+      timeoutSec: 600,
+    });
+
+    if (!worker.sessionId) {
+      worker.sessionId = spec.sessionId;
+    }
+
+    this.spawnWorkerProcess(worker, spec.command, spec.args);
+  }
+
   private async runOpenCode(worker: OpenCodeWorker, prompt: string): Promise<void> {
-    const args = ["run", prompt, "--format", "json", "--dir", resolve(this.config.colonyRoot)];
-    if (worker.model) {
-      args.push("--model", worker.model);
-    }
-    if (worker.sessionId) {
-      args.push("--session", worker.sessionId);
-    } else {
-      args.push("--title", `Termite: ${worker.id}`);
-    }
-    this.spawnWorkerProcess(worker, "opencode", args);
+    this.runNativeCli(worker, prompt, "opencode");
   }
 
   private async runClaude(worker: OpenCodeWorker, prompt: string): Promise<void> {
-    if (!worker.sessionId) {
-      worker.sessionId = randomUUID();
-    }
-
-    const args = [
-      "-p",
-      prompt,
-      "--output-format",
-      "stream-json",
-      "--permission-mode",
-      "bypassPermissions",
-      "--session-id",
-      worker.sessionId,
-    ];
-    if (worker.model) {
-      args.push("--model", worker.model);
-    }
-    this.spawnWorkerProcess(worker, "claude", args);
+    this.runNativeCli(worker, prompt, "claude");
   }
 
   private async runCodex(worker: OpenCodeWorker, prompt: string): Promise<void> {
-    const args = worker.sessionId
-      ? ["exec", "resume", worker.sessionId, prompt]
-      : ["exec", prompt];
+    this.runNativeCli(worker, prompt, "codex");
+  }
 
-    args.push("--json", "--full-auto", "--skip-git-repo-check", "-C", resolve(this.config.colonyRoot));
-    if (worker.model) {
-      args.push("-m", worker.model);
+  private runNativeCli(
+    worker: OpenCodeWorker,
+    prompt: string,
+    runtime: WorkerRuntime,
+  ): void {
+    const spec = this.nativeCliProvider.buildStartSpec({
+      runtime,
+      workspace: this.config.colonyRoot,
+      workerId: worker.id,
+      prompt,
+      model: worker.model,
+      sessionId: worker.sessionId,
+    });
+    if (spec.preassignedSessionId && !worker.sessionId) {
+      worker.sessionId = spec.preassignedSessionId;
     }
-    this.spawnWorkerProcess(worker, "codex", args);
+    this.spawnWorkerProcess(worker, spec.command, spec.args);
   }
 
   private spawnWorkerProcess(worker: OpenCodeWorker, command: string, args: string[]): void {
@@ -286,12 +297,16 @@ export class OpenCodeLauncher {
     worker.process = child;
     child.stdout?.on("data", (data: Buffer) => {
       const text = data.toString();
-      for (const line of text.split("\n")) {
-        const sessionId = this.extractSessionId(line);
-        if (sessionId && !worker.sessionId) {
-          worker.sessionId = sessionId;
-          console.log(`[worker:${worker.id}] Session: ${worker.sessionId}`);
-        }
+      const snapshot =
+        command === "openclaw"
+          ? this.openClawProvider.extractSessionSnapshot(text)
+          : this.nativeCliProvider.extractSessionSnapshot(text);
+      if (snapshot.sessionId && !worker.sessionId) {
+        worker.sessionId = snapshot.sessionId;
+        console.log(`[worker:${worker.id}] Session: ${worker.sessionId}`);
+      }
+      if (snapshot.runId && !worker.runId) {
+        worker.runId = snapshot.runId;
       }
     });
 
@@ -305,39 +320,6 @@ export class OpenCodeLauncher {
       worker.status = code === 0 ? "idle" : "errored";
       worker.process = null;
     });
-  }
-
-  private extractSessionId(line: string): string | null {
-    const trimmed = line.trim();
-    if (!trimmed) return null;
-    try {
-      const parsed = JSON.parse(trimmed);
-      return this.findSessionId(parsed);
-    } catch {
-      return null;
-    }
-  }
-
-  private findSessionId(value: unknown): string | null {
-    if (typeof value === "string") return null;
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        const nested = this.findSessionId(item);
-        if (nested) return nested;
-      }
-      return null;
-    }
-    if (!value || typeof value !== "object") return null;
-
-    const obj = value as Record<string, unknown>;
-    for (const [key, nested] of Object.entries(obj)) {
-      if (SESSION_ID_KEYS.has(key) && typeof nested === "string" && nested.trim()) {
-        return nested.trim();
-      }
-      const discovered = this.findSessionId(nested);
-      if (discovered) return discovered;
-    }
-    return null;
   }
 
   async pulseWorker(workerId: string): Promise<boolean> {

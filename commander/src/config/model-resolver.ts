@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 // Interfaces
 // ---------------------------------------------------------------------------
 
-export type WorkerRuntime = "opencode" | "claude" | "codex";
+export type WorkerRuntime = "opencode" | "claude" | "codex" | "openclaw";
 
 export interface WorkerSpec {
   cli: WorkerRuntime;
@@ -153,7 +153,12 @@ export function normalizeWorkerRuntime(
 ): WorkerRuntime {
   if (!value) return fallback;
   const normalized = value.toLowerCase().trim();
-  if (normalized === "opencode" || normalized === "claude" || normalized === "codex") {
+  if (
+    normalized === "opencode" ||
+    normalized === "claude" ||
+    normalized === "codex" ||
+    normalized === "openclaw"
+  ) {
     return normalized;
   }
   return fallback;
@@ -207,7 +212,7 @@ function dedupeMessages(values: string[]): string[] {
  * Formats:
  *   "3"                               -> [{ cli: "opencode", model: undefined, count: 3 }]
  *   "sonnet:1,haiku:2"                -> legacy syntax with default runtime
- *   "codex@gpt-5-codex:1,claude@sonnet:1" -> explicit per-worker runtime
+ *   "codex@gpt-5-codex:1,claude@sonnet:1,openclaw@coding-agent:1" -> explicit per-worker runtime
  */
 export function parseWorkerSpec(
   spec: string,
@@ -228,7 +233,7 @@ export function parseWorkerSpec(
     .map((entry) => entry.trim())
     .filter(Boolean)
     .map((entry) => {
-      const runtimeModelMatch = entry.match(/^(opencode|claude|codex)@(.+?)(?::(\d+))?$/i);
+      const runtimeModelMatch = entry.match(/^(opencode|claude|codex|openclaw)@(.+?)(?::(\d+))?$/i);
       if (runtimeModelMatch) {
         const cli = normalizeWorkerRuntime(runtimeModelMatch[1], defaultCli);
         const model = runtimeModelMatch[2].trim();
@@ -238,7 +243,7 @@ export function parseWorkerSpec(
         return { cli, model, count };
       }
 
-      const runtimeCountMatch = entry.match(/^(opencode|claude|codex):(\d+)$/i);
+      const runtimeCountMatch = entry.match(/^(opencode|claude|codex|openclaw):(\d+)$/i);
       if (runtimeCountMatch) {
         const cli = normalizeWorkerRuntime(runtimeCountMatch[1], defaultCli);
         const parsed = parseInt(runtimeCountMatch[2], 10);

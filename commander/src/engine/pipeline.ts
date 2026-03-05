@@ -66,6 +66,7 @@ export class Pipeline {
       model: w.model,
       status: w.status,
       sessionId: w.sessionId,
+      runId: w.runId,
       startedAt: w.startedAt.toISOString(),
     }));
     const data = {
@@ -396,6 +397,7 @@ export class Pipeline {
         opencode: "opencode (https://github.com/nicepkg/opencode)",
         claude: "Claude Code CLI (command: claude)",
         codex: "Codex CLI (command: codex)",
+        openclaw: "OpenClaw CLI (command: openclaw)",
       };
       const details = runtimeCheck.missing
         .map((runtime) => `  - ${runtime}: ${installHints[runtime] ?? "install corresponding CLI"}`)

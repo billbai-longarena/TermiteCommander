@@ -213,6 +213,7 @@ PLAN.md（你的设计方案）
 
 - **Node.js 18+**
 - **OpenCode** — [github.com/nicepkg/opencode](https://github.com/nicepkg/opencode)（驱动工人 Agent）
+- **OpenClaw** — [github.com/openclaw/openclaw](https://github.com/openclaw/openclaw)（可选，仅在使用 `openclaw` 工人时需要）
 - **LLM 凭证**（按分解模型 provider 选择）：
   - Anthropic：`ANTHROPIC_API_KEY`（或 Foundry 组合 `ANTHROPIC_FOUNDRY_API_KEY` + `ANTHROPIC_FOUNDRY_RESOURCE`）
   - OpenAI：`OPENAI_API_KEY`
@@ -281,8 +282,11 @@ termite-commander install --colony .
 # 默认: opencode + 3 个 Haiku 工人，Sonnet 做信号分解
 export TERMITE_WORKER_CLI=opencode
 
-# 推荐混合舰队（支持 opencode / claude / codex）
+# 推荐混合舰队（支持 opencode / claude / codex / openclaw）
 export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
+
+# OpenClaw 工人（model 字段 = OpenClaw agent-id）
+export TERMITE_WORKERS=openclaw@main:1
 ```
 
 **第 5 步** — 启动蚁群：
@@ -312,7 +316,7 @@ cd ~/your-project && termite-commander
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
 | `COMMANDER_MODEL` | 强模型（信号分解，环境变量兜底） | `（必填）` |
-| `TERMITE_WORKER_CLI` | 默认工人运行时（`opencode` / `claude` / `codex`） | `opencode` |
+| `TERMITE_WORKER_CLI` | 默认工人运行时（`opencode` / `claude` / `codex` / `openclaw`） | `opencode` |
 | `TERMITE_MODEL` | 默认弱模型（工人） | `claude-haiku-3-5` |
 | `TERMITE_WORKERS` | 舰队配置（`count`、`model:count`、`cli@model:count`） | `3`（3 个默认模型） |
 
@@ -357,6 +361,9 @@ export TERMITE_WORKERS=sonnet:1,haiku:2,gemini-flash:1
 # 混合 CLI 舰队
 export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
 
+# OpenClaw 工人（model 表示 agent-id）
+export TERMITE_WORKERS=openclaw@main:1
+
 # 通过 opencode.json 配置
 # {
 #   "model": "anthropic/claude-sonnet-4-5",
@@ -372,6 +379,8 @@ export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
 #   }
 # }
 ```
+
+OpenClaw 说明：`openclaw agent` 必须具备路由上下文（`--agent` / `--to` / `--session-id`）。Commander 现在会保证路由参数合法，并跟踪 OpenClaw 工人的 session ID。
 
 **推荐配置**：1 个强模型工人 (Sonnet) + N 个弱模型工人 (Haiku)。强模型工人的信息素沉积成为模板，通过牧羊效应放大弱模型工人的产出质量。
 
@@ -429,7 +438,8 @@ commander/src/
     decomposer.ts              # 弱模型信号标准
   colony/
     signal-bridge.ts           # SQLite DB，通过白蚁协议场脚本访问
-    opencode-launcher.ts       # 混合模型工人舰队
+    opencode-launcher.ts       # 混合模型工人舰队（opencode/claude/codex/openclaw）
+    providers/                 # Provider 合约 + native-cli/openclaw 适配器
     plan-writer.ts / halt-writer.ts
   heartbeat/
     commander-loop.ts          # 60 秒战略监控
@@ -441,7 +451,7 @@ commander/src/
     hooks/                     # useColonyState, useGitCommits, useLogTail
 ```
 
-89 个测试，12 个测试套件。`npm run build && npm test`。
+97 个测试，13 个测试套件。`npm run build && npm test`。
 
 ---
 

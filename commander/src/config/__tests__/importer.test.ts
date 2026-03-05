@@ -43,6 +43,7 @@ describe("importExternalConfig", () => {
             workers: [
               { cli: "codex", model: "openai/gpt-5-codex", count: 1 },
               { cli: "opencode", count: 2 },
+              { cli: "openclaw", model: "coding-fast", count: 1 },
               { cli: "claude", model: "anthropic/claude-haiku-3-5", count: 0 },
             ],
           },
@@ -62,6 +63,7 @@ describe("importExternalConfig", () => {
         workers: [
           { cli: "codex", model: "openai/gpt-5-codex", count: 1 },
           { cli: "opencode", count: 2 },
+          { cli: "openclaw", model: "coding-fast", count: 1 },
         ],
       },
     });

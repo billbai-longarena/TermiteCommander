@@ -149,14 +149,18 @@ function normalizeWorkersFromOpenCode(
     .filter((w) => w && typeof w === "object")
     .map((worker) => {
       const out: { cli?: WorkerRuntime; model?: string; count?: number } = {};
+      let cliValue: WorkerRuntime | undefined;
       if (typeof worker.cli === "string") {
         const cli = worker.cli.toLowerCase().trim();
-        if (cli === "opencode" || cli === "claude" || cli === "codex") {
+        if (cli === "opencode" || cli === "claude" || cli === "codex" || cli === "openclaw") {
           out.cli = cli;
+          cliValue = cli;
         }
       }
       if (typeof worker.model === "string" && worker.model.trim()) {
-        out.model = normalizeImportedModel(worker.model);
+        out.model = cliValue === "openclaw"
+          ? worker.model.trim()
+          : normalizeImportedModel(worker.model);
       }
       if (typeof worker.count === "number" && Number.isInteger(worker.count) && worker.count > 0) {
         out.count = worker.count;

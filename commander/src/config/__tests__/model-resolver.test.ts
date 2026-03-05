@@ -27,11 +27,12 @@ describe("parseWorkerSpec", () => {
   });
 
   it("parses explicit runtime syntax", () => {
-    const result = parseWorkerSpec("codex@gpt-5-codex:1,claude@sonnet:2,opencode@haiku");
+    const result = parseWorkerSpec("codex@gpt-5-codex:1,claude@sonnet:2,opencode@haiku,openclaw@coding-fast:3");
     expect(result).toEqual([
       { cli: "codex", model: "gpt-5-codex", count: 1 },
       { cli: "claude", model: "sonnet", count: 2 },
       { cli: "opencode", model: "haiku", count: 1 },
+      { cli: "openclaw", model: "coding-fast", count: 3 },
     ]);
   });
 
@@ -281,12 +282,13 @@ describe("resolveModels", () => {
 
   it("parses TERMITE_WORKERS with mixed runtimes", () => {
     process.env.COMMANDER_MODEL = "anthropic/claude-sonnet-4-5";
-    process.env.TERMITE_WORKERS = "codex@gpt-5-codex:1,claude@sonnet:1,opencode@haiku:2";
+    process.env.TERMITE_WORKERS = "codex@gpt-5-codex:1,claude@sonnet:1,opencode@haiku:2,openclaw@coding-fast:1";
     const result = resolveModels(tempDir);
     expect(result.workers).toEqual([
       { cli: "codex", model: "gpt-5-codex", count: 1 },
       { cli: "claude", model: "sonnet", count: 1 },
       { cli: "opencode", model: "haiku", count: 2 },
+      { cli: "openclaw", model: "coding-fast", count: 1 },
     ]);
   });
 

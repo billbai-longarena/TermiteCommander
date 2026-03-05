@@ -213,6 +213,7 @@ Each signal follows **weak-model execution standards**:
 
 - **Node.js 18+**
 - **OpenCode** — [github.com/nicepkg/opencode](https://github.com/nicepkg/opencode) (drives worker agents)
+- **OpenClaw** — [github.com/openclaw/openclaw](https://github.com/openclaw/openclaw) (optional, when using `openclaw` workers)
 - **LLM credentials** for your selected decomposition provider:
   - Anthropic: `ANTHROPIC_API_KEY` (or Foundry pair `ANTHROPIC_FOUNDRY_API_KEY` + `ANTHROPIC_FOUNDRY_RESOURCE`)
   - OpenAI: `OPENAI_API_KEY`
@@ -250,7 +251,7 @@ npm outdated -g --depth=0
 
 ### 7-Step Workflow
 
-**Step 1** — Enter your project and start Claude Code (or OpenCode):
+**Step 1** — Enter your project and start Claude Code / OpenCode:
 ```bash
 cd ~/your-project
 claude    # or: opencode
@@ -281,8 +282,11 @@ Design quality directly determines colony output quality. Invest time here.
 # Default: opencode + 3 Haiku workers, Sonnet for signal decomposition
 export TERMITE_WORKER_CLI=opencode
 
-# Recommended mixed fleet (supports opencode / claude / codex):
+# Recommended mixed fleet (supports opencode / claude / codex / openclaw):
 export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
+
+# OpenClaw worker (model field = OpenClaw agent-id)
+export TERMITE_WORKERS=openclaw@main:1
 ```
 
 **Step 5** — Launch the colony:
@@ -312,7 +316,7 @@ cd ~/your-project && termite-commander
 | Variable          | Purpose                             | Default             |
 | ----------------- | ----------------------------------- | ------------------- |
 | `COMMANDER_MODEL` | Strong model (signal decomposition, env fallback) | `(required)` |
-| `TERMITE_WORKER_CLI` | Default worker runtime (`opencode` / `claude` / `codex`) | `opencode` |
+| `TERMITE_WORKER_CLI` | Default worker runtime (`opencode` / `claude` / `codex` / `openclaw`) | `opencode` |
 | `TERMITE_MODEL`   | Default weak model (workers)        | `claude-haiku-3-5`  |
 | `TERMITE_WORKERS` | Fleet spec (`count`, `model:count`, `cli@model:count`) | `3` (3x default)    |
 
@@ -357,6 +361,9 @@ export TERMITE_WORKERS=sonnet:1,haiku:2,gemini-flash:1
 # Mixed CLI fleet
 export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
 
+# OpenClaw worker (model means agent-id)
+export TERMITE_WORKERS=openclaw@main:1
+
 # Via opencode.json
 # {
 #   "model": "anthropic/claude-sonnet-4-5",
@@ -372,6 +379,8 @@ export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
 #   }
 # }
 ```
+
+OpenClaw note: `openclaw agent` requires routing context (`--agent` / `--to` / `--session-id`). Commander now enforces valid route construction and tracks session IDs for OpenClaw workers.
 
 **Recommended configuration**: 1 strong model worker (Sonnet) + N weak model workers (Haiku). The strong worker's pheromone deposits become templates that amplify weak worker quality via the Shepherd Effect.
 
@@ -429,7 +438,8 @@ commander/src/
     decomposer.ts              # Weak-model signal standards
   colony/
     signal-bridge.ts           # SQLite DB via termite field scripts
-    opencode-launcher.ts       # Mixed-model worker fleet
+    opencode-launcher.ts       # Mixed-model worker fleet (opencode/claude/codex/openclaw)
+    providers/                 # Provider contract + native-cli/openclaw adapters
     plan-writer.ts / halt-writer.ts
   heartbeat/
     commander-loop.ts          # 60s strategic monitoring
@@ -441,7 +451,7 @@ commander/src/
     hooks/                     # useColonyState, useGitCommits, useLogTail
 ```
 
-89 tests across 12 suites. `npm run build && npm test`.
+97 tests across 13 suites. `npm run build && npm test`.
 
 ---
 

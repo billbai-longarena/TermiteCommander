@@ -25,7 +25,7 @@ termite-commander --help
 
 - Node.js >= 18
 - Git
-- OpenCode / Claude Code / Codex CLI (based on your worker runtime)
+- OpenCode / Claude Code / Codex / OpenClaw CLI (based on your worker runtime)
 
 ## Required Model Config
 

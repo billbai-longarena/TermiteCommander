@@ -107,6 +107,8 @@ program
           console.warn("  - claude: install Claude Code CLI");
         } else if (runtime === "codex") {
           console.warn("  - codex: install Codex CLI");
+        } else if (runtime === "openclaw") {
+          console.warn("  - openclaw: install OpenClaw CLI");
         }
       }
     } else {

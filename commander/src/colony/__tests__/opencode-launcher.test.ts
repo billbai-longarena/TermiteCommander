@@ -102,14 +102,15 @@ describe("OpenCodeLauncher", () => {
     const launcher = createLauncher([
       { cli: "opencode", model: undefined, count: 1 },
       { cli: "claude", model: "anthropic/claude-sonnet-4-5", count: 1 },
+      { cli: "openclaw", model: "coding-fast", count: 1 },
       { cli: "opencode", model: "anthropic/claude-haiku-3-5", count: 2 },
     ]);
 
     vi.spyOn(launcher, "checkRuntime").mockImplementation(async (runtime) => runtime !== "claude");
     const result = await launcher.checkRequiredRuntimes();
 
-    expect(result.required).toEqual(["opencode", "claude"]);
-    expect(result.available).toEqual(["opencode"]);
+    expect(result.required).toEqual(["opencode", "claude", "openclaw"]);
+    expect(result.available).toEqual(["opencode", "openclaw"]);
     expect(result.missing).toEqual(["claude"]);
   });
 
@@ -195,6 +196,20 @@ describe("OpenCodeLauncher", () => {
     expect(secondArgs.slice(0, 3)).toEqual(["exec", "resume", "codex-session-xyz"]);
   });
 
+  it("launches openclaw worker with agent and session-id args", async () => {
+    const launcher = createLauncher([{ cli: "openclaw", model: "coding-fast", count: 1 }]);
+    const worker = await launcher.launchWorker("coding-fast", "openclaw", "worker-openclaw");
+
+    const [command, args] = spawnMock.mock.calls[0] as [string, string[]];
+    expect(command).toBe("openclaw");
+    expect(args.slice(0, 3)).toEqual(["agent", "--message", expect.any(String)]);
+    expect(args).toContain("--agent");
+    expect(args[args.indexOf("--agent") + 1]).toBe("coding-fast");
+    expect(args).toContain("--session-id");
+    expect(args[args.indexOf("--session-id") + 1]).toBe("uuid-fixed-123");
+    expect(worker.sessionId).toBe("uuid-fixed-123");
+  });
+
   it("extracts session id from nested JSON stream output", async () => {
     const launcher = createLauncher();
     const worker = await launcher.launchWorker("anthropic/claude-haiku-3-5", "opencode", "worker-3");
@@ -210,6 +225,28 @@ describe("OpenCodeLauncher", () => {
     // New session IDs should not override the first captured value.
     child.stdout.emit("data", Buffer.from('{"sessionId":"sess-other"}\n'));
     expect(worker.sessionId).toBe("sess-nested-123");
+  });
+
+  it("extracts session id and run id from formatted JSON chunks", async () => {
+    const launcher = createLauncher();
+    const worker = await launcher.launchWorker("anthropic/claude-haiku-3-5", "opencode", "worker-formatted");
+    const child = fakeChildren[0];
+
+    child.stdout.emit(
+      "data",
+      Buffer.from(`{
+  "runId": "run-123",
+  "result": {
+    "payload": {
+      "sessionId": "sess-pretty-123"
+    }
+  }
+}
+`),
+    );
+
+    expect(worker.sessionId).toBe("sess-pretty-123");
+    expect(worker.runId).toBe("run-123");
   });
 
   it("updates worker status on process exit code", async () => {
