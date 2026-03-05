@@ -89,7 +89,7 @@ termite-commander watch            # Polling status
 
 ## Model Configuration
 
-Priority: environment variables > opencode.json > defaults
+Priority: opencode.json > environment variables > defaults
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
@@ -104,7 +104,7 @@ Falls back to opencode.json: `model`, `small_model`, `commander.workers`.
 ```bash
 cd commander
 npm run build          # tsc
-npm test               # 50 tests, 7 suites
+npm test               # 57 tests, 9 suites
 ```
 
 ## Conventions
@@ -112,8 +112,9 @@ npm test               # 50 tests, 7 suites
 - TypeScript strict mode, ESM (ES2022 target), JSX via react-jsx
 - TUI: Ink 5 + React 18 — read-only full-screen dashboard (alternate screen buffer)
 - Pipeline: 2 phases (classify + decompose), auto-installs protocol + genesis
-- Model config: env vars > opencode.json > defaults, mixed-model worker fleets
+- Model config: opencode.json > env vars > defaults, mixed-model worker fleets
+- Model status feedback: `plan` and `status` print effective model selection and source (config/env/default)
 - Workers: `opencode run --model <provider/model>` per worker
 - Pre-flight checks: OpenCode availability, protocol presence
-- LLM provider: Anthropic (default) or Azure OpenAI via Vercel AI SDK
+- LLM provider: Anthropic (default), OpenAI, or Azure OpenAI via Vercel AI SDK
 - Signals use SQLite (via colony's termite-db.sh)
