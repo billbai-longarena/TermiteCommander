@@ -7,9 +7,14 @@ import { PlanWriter, type Plan } from "../colony/plan-writer.js";
 import { CommanderLoop } from "../heartbeat/commander-loop.js";
 import { ColonyLoop, type Platform } from "../heartbeat/colony-loop.js";
 import { callLLM, type LLMConfig } from "../llm/provider.js";
-import { configFromResolved } from "../llm/provider.js";
-import { resolveModels, type ResolvedModels } from "../config/model-resolver.js";
+import { assertProviderCredentials, configFromResolved } from "../llm/provider.js";
+import {
+  resolveModels,
+  type ResolvedModels,
+  assertPlanningModelConfigured,
+} from "../config/model-resolver.js";
 import { OpenCodeLauncher } from "../colony/opencode-launcher.js";
+import { ensureWorkspaceBoundary } from "../colony/workspace-boundary.js";
 
 export interface PipelineConfig {
   colonyRoot: string;
@@ -29,9 +34,11 @@ export class Pipeline {
     this.config = config;
     this.bridge = new SignalBridge(config.colonyRoot);
     this.models = resolveModels(config.colonyRoot);
+    assertPlanningModelConfigured(this.models);
     this.logModelResolution();
     // Override llmConfig with resolved models
     this.config.llmConfig = configFromResolved(this.models);
+    assertProviderCredentials(this.config.llmConfig.provider);
     this.launcher = new OpenCodeLauncher({
       colonyRoot: config.colonyRoot,
       skillSourceDir: config.skillSourceDir,
@@ -107,6 +114,9 @@ export class Pipeline {
     console.log(
       `  workers=${workersLabel} source=${this.models.resolution.workers.source} (${this.models.resolution.workers.detail})`,
     );
+    for (const warning of this.models.issues.warnings) {
+      console.warn(`[commander] Model config warning: ${warning}`);
+    }
   }
 
   private cleanupLockFile(): void {
@@ -283,6 +293,12 @@ export class Pipeline {
     const dbScript = join(this.config.colonyRoot, "scripts", "termite-db.sh");
     if (existsSync(dbScript)) {
       console.log("[commander] Termite Protocol detected.");
+      const setup = ensureWorkspaceBoundary(this.config.colonyRoot);
+      if (setup.createdFiles.length > 0 || setup.createdDirs.length > 0 || setup.gitignoreUpdated) {
+        console.log(
+          `[commander] Workspace boundary initialized: dirs=${setup.createdDirs.length} files=${setup.createdFiles.length} gitignore=${setup.gitignoreUpdated ? "updated" : "ok"}`,
+        );
+      }
       return;
     }
 
@@ -333,6 +349,12 @@ export class Pipeline {
       }
     }
     console.log("[commander] Termite Protocol installed.");
+    const setup = ensureWorkspaceBoundary(this.config.colonyRoot);
+    if (setup.createdFiles.length > 0 || setup.createdDirs.length > 0 || setup.gitignoreUpdated) {
+      console.log(
+        `[commander] Workspace boundary initialized: dirs=${setup.createdDirs.length} files=${setup.createdFiles.length} gitignore=${setup.gitignoreUpdated ? "updated" : "ok"}`,
+      );
+    }
   }
 
   /**

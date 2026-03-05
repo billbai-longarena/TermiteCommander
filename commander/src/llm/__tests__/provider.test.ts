@@ -39,7 +39,11 @@ vi.mock("@ai-sdk/anthropic", () => ({
   createAnthropic: createAnthropicMock,
 }));
 
-import { callLLM } from "../provider.js";
+import {
+  assertProviderCredentials,
+  callLLM,
+  checkProviderCredentials,
+} from "../provider.js";
 
 describe("callLLM provider routing", () => {
   const savedEnv: Record<string, string | undefined> = {};
@@ -111,5 +115,64 @@ describe("callLLM provider routing", () => {
     await expect(
       callLLM("hello", { provider: "openai", model: "gpt-4o" }),
     ).rejects.toThrow("OPENAI_API_KEY not set");
+  });
+});
+
+describe("provider credential checks", () => {
+  const savedEnv: Record<string, string | undefined> = {};
+  const envKeys = [
+    "OPENAI_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_ENDPOINT",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_FOUNDRY_API_KEY",
+    "ANTHROPIC_FOUNDRY_RESOURCE",
+  ];
+
+  beforeEach(() => {
+    for (const key of envKeys) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const key of envKeys) {
+      if (savedEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = savedEnv[key];
+      }
+    }
+  });
+
+  it("reports missing OPENAI_API_KEY for openai provider", () => {
+    const status = checkProviderCredentials("openai");
+    expect(status.ok).toBe(false);
+    expect(status.missing).toContain("OPENAI_API_KEY");
+    expect(() => assertProviderCredentials("openai")).toThrow("LLM credential check failed");
+  });
+
+  it("passes for azure-openai when both key and endpoint are set", () => {
+    process.env.AZURE_OPENAI_API_KEY = "azure-key";
+    process.env.AZURE_OPENAI_ENDPOINT = "https://example.azure.com";
+    const status = checkProviderCredentials("azure-openai");
+    expect(status.ok).toBe(true);
+    expect(status.missing).toEqual([]);
+    expect(() => assertProviderCredentials("azure-openai")).not.toThrow();
+  });
+
+  it("passes for anthropic with ANTHROPIC_API_KEY", () => {
+    process.env.ANTHROPIC_API_KEY = "anthropic-key";
+    const status = checkProviderCredentials("anthropic");
+    expect(status.ok).toBe(true);
+    expect(status.missing).toEqual([]);
+  });
+
+  it("requires resource when only ANTHROPIC_FOUNDRY_API_KEY is set", () => {
+    process.env.ANTHROPIC_FOUNDRY_API_KEY = "foundry-key";
+    const status = checkProviderCredentials("anthropic");
+    expect(status.ok).toBe(false);
+    expect(status.missing).toContain("ANTHROPIC_FOUNDRY_RESOURCE");
   });
 });

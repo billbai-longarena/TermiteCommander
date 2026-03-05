@@ -54,12 +54,14 @@ cd .. && git add TermiteProtocol && git commit -m "chore: update TermiteProtocol
 ```
 commander/
   src/
-    config/model-resolver.ts     # Model config: opencode.json + env vars
+    config/model-resolver.ts     # Model config: termite.config.json + opencode.json + env vars
+    config/importer.ts           # Import/recommend config from opencode/claude/codex
     engine/pipeline.ts           # 2-phase: classify → decompose + auto protocol install + genesis
     engine/classifier.ts         # BUILD / HYBRID classification
     engine/decomposer.ts         # Signal decomposition with weak-model standards
     colony/signal-bridge.ts      # DB/bash bridge to colony (status + listSignals)
     colony/opencode-launcher.ts  # Mixed-model worker fleet (passes --model to opencode run)
+    colony/workspace-boundary.ts # Human/worker workspace isolation bootstrap
     colony/plan-writer.ts        # PLAN.md generation
     colony/halt-writer.ts        # HALT.md generation
     heartbeat/                   # Commander + Colony loops, circuit breaker
@@ -81,6 +83,9 @@ termite-commander                  # Read-only TUI dashboard (full-screen)
 termite-commander install          # Install skills into project
 termite-commander plan "<obj>" --colony <path> [--plan <file>] [--context <text>] [--dispatch] [--run]
 termite-commander status [--json]  # Colony status
+termite-commander config import --from auto [--apply] [--force] [--json]
+termite-commander config bootstrap --from auto [--force] [--json]
+termite-commander doctor --config [--json]
 termite-commander workers [--json] # Worker status
 termite-commander stop             # Stop + cleanup stale state
 termite-commander resume           # Resume from halt
@@ -89,23 +94,38 @@ termite-commander watch            # Polling status
 
 ## Model Configuration
 
-Priority: opencode.json > environment variables > defaults
+Priority: termite.config.json > opencode.json > environment variables > defaults
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| COMMANDER_MODEL | Strong model for signal decomposition | claude-sonnet-4-5 |
+| COMMANDER_MODEL | Strong model for signal decomposition (env fallback) | required |
 | TERMITE_WORKER_CLI | Default worker runtime (opencode/claude/codex) | opencode |
 | TERMITE_MODEL | Default weak model for workers | claude-haiku-3-5 |
 | TERMITE_WORKERS | Worker fleet spec ("3", "model:count", "cli@model:count") | 3 × default |
 
-Falls back to opencode.json: `model`, `small_model_cli`, `small_model`, `commander.default_worker_cli`, `commander.workers`.
+Commander model has no default. Configure one of:
+`termite.config.json -> commander.model`,
+`termite.config.json -> commander_model`,
+`opencode.json -> model`,
+or `COMMANDER_MODEL`.
+
+Worker fallback fields:
+`termite.config.json` (`commander.default_worker_cli`, `commander.default_worker_model`, `commander.workers`) →
+`opencode.json` (`small_model_cli`, `small_model`, `commander.workers`) →
+env vars.
+
+Recommended migration flow:
+```bash
+termite-commander config bootstrap --from auto
+# If doctor reports credentials missing, export provider-specific API env vars.
+```
 
 ## Build & Test
 
 ```bash
 cd commander
 npm run build          # tsc
-npm test               # 61 tests, 9 suites
+npm test               # 77 tests, 11 suites
 ```
 
 ## Conventions
@@ -113,9 +133,10 @@ npm test               # 61 tests, 9 suites
 - TypeScript strict mode, ESM (ES2022 target), JSX via react-jsx
 - TUI: Ink 5 + React 18 — read-only full-screen dashboard (alternate screen buffer)
 - Pipeline: 2 phases (classify + decompose), auto-installs protocol + genesis
-- Model config: opencode.json > env vars > defaults, mixed-model worker fleets
+- Model config: termite.config.json > opencode.json > env vars > defaults; commander decomposition model is required
 - Model status feedback: `plan` and `status` print effective model selection and source (config/env/default)
 - Workers: supports `opencode`, `claude`, and `codex` runtimes with mixed fleet scheduling
+- Workspace boundary: `.termite/human/` (drafts) vs `.termite/worker/` (worker-facing context)
 - Pre-flight checks: runtime CLI availability + protocol presence
 - LLM provider: Anthropic (default), OpenAI, or Azure OpenAI via Vercel AI SDK
 - Signals use SQLite (via colony's termite-db.sh)

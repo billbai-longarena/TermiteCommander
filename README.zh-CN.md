@@ -213,7 +213,10 @@ PLAN.md（你的设计方案）
 
 - **Node.js 18+**
 - **OpenCode** — [github.com/nicepkg/opencode](https://github.com/nicepkg/opencode)（驱动工人 Agent）
-- **Anthropic API Key** — `export ANTHROPIC_API_KEY=sk-...`
+- **LLM 凭证**（按分解模型 provider 选择）：
+  - Anthropic：`ANTHROPIC_API_KEY`（或 Foundry 组合 `ANTHROPIC_FOUNDRY_API_KEY` + `ANTHROPIC_FOUNDRY_RESOURCE`）
+  - OpenAI：`OPENAI_API_KEY`
+  - Azure OpenAI：`AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT`
 - **Git**
 
 ### 第 0 步：安装 Commander（一次性，全局）
@@ -261,13 +264,15 @@ termite-commander install --colony .
 - `.claude/plugins/termite-commander/` — Claude Code 插件（SessionStart hook + /commander skill）
 - `.opencode/skill/commander/` — OpenCode 的 commander skill
 - `.opencode/skill/termite/` — 白蚁协议 skill（工人用来认领信号、沉积信息素）
+- `.termite/human/` — 人类草稿区（默认不作为工人上下文）
+- `.termite/worker/` — 工人上下文区（默认 `PLAN.md` 位置）
 
 安装后 Claude Code 识别 `/commander` 和自然语言触发（"让蚁群干活"、"deploy termites"）。
 
 **第 3 步** — 在 Claude Code 中做设计：
 ```
 > 帮我设计一个 OAuth2 认证系统。
-> 把架构方案写到 PLAN.md。
+> 把最终可执行方案写到 .termite/worker/PLAN.md。
 ```
 设计质量直接决定蚁群产出质量。花时间在这步。
 
@@ -282,7 +287,7 @@ export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
 
 **第 5 步** — 启动蚁群：
 ```
-> /commander 按照 PLAN.md 开始施工
+> /commander 按照 .termite/worker/PLAN.md 开始施工
 ```
 Commander 自动完成全链路：检测白蚁协议（没有则从 GitHub 安装）→ 创世 → 信号分解 → 发布 → 启动工人 → 心跳监控。
 
@@ -301,16 +306,48 @@ cd ~/your-project && termite-commander
 
 ## 模型配置
 
-**优先级**：`opencode.json` > 环境变量 > 默认值
+**优先级**：`termite.config.json` > `opencode.json` > 环境变量 > 默认值  
+（`commander` 分解模型**没有默认值**，必须配置）
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `COMMANDER_MODEL` | 强模型（信号分解） | `claude-sonnet-4-5` |
+| `COMMANDER_MODEL` | 强模型（信号分解，环境变量兜底） | `（必填）` |
 | `TERMITE_WORKER_CLI` | 默认工人运行时（`opencode` / `claude` / `codex`） | `opencode` |
 | `TERMITE_MODEL` | 默认弱模型（工人） | `claude-haiku-3-5` |
 | `TERMITE_WORKERS` | 舰队配置（`count`、`model:count`、`cli@model:count`） | `3`（3 个默认模型） |
 
+建议先做配置导入与诊断（自动读取 opencode / claude / codex 配置并推荐）：
 ```bash
+# 仅预览候选配置和置信度
+termite-commander config import --from auto
+
+# 一键工具（适合 skill 触发）：导入 + 合并 + 诊断
+termite-commander config bootstrap --from auto
+
+# 应用到 termite.config.json（默认保留已存在字段）
+termite-commander config import --from auto --apply
+
+# 强制覆盖 termite.config.json 中已有字段
+termite-commander config import --from auto --apply --force
+
+# 诊断配置（缺失分解模型或 provider 凭证时返回非 0）
+termite-commander doctor --config
+```
+
+```bash
+# 推荐主配置：termite.config.json
+# {
+#   "commander": {
+#     "model": "anthropic/claude-sonnet-4-5",
+#     "default_worker_cli": "opencode",
+#     "default_worker_model": "anthropic/claude-haiku-3-5",
+#     "workers": [
+#       {"cli":"opencode","model":"anthropic/claude-sonnet-4-5","count":1},
+#       {"cli":"opencode","model":"anthropic/claude-haiku-3-5","count":2}
+#     ]
+#   }
+# }
+
 # 统一舰队
 export TERMITE_WORKERS=3
 
@@ -352,6 +389,14 @@ termite-commander plan <目标>          分解并执行
   --run                                  完整执行模式
   --dispatch                             仅发布信号
 termite-commander status [--json]      蚁丘状态
+termite-commander config import         从其他 CLI 配置导入/推荐模型配置
+  --from <auto|opencode|claude|codex>    来源选择（默认 auto）
+  --apply                                 写入 termite.config.json
+  --force                                 覆盖已有字段
+termite-commander config bootstrap      一键导入+合并+诊断（适合 skill 触发）
+  --from <auto|opencode|claude|codex>    来源选择（默认 auto）
+  --force                                 覆盖已有字段
+termite-commander doctor [--config]     运行诊断（配置/凭证错误时非 0 退出）
 termite-commander workers [--json]     工人状态
 termite-commander stop                 停止所有 + 清理过期状态
 termite-commander resume               从暂停恢复
@@ -376,7 +421,8 @@ termite-commander watch                轮询状态（非 TUI）
 
 ```
 commander/src/
-  config/model-resolver.ts     # opencode.json + 环境变量 → 模型配置
+  config/model-resolver.ts     # termite.config + opencode + env → 模型解析
+  config/importer.ts           # 从 opencode/claude/codex 导入与推荐配置
   engine/
     pipeline.ts                # 2 阶段：分类 → 分解
     classifier.ts              # BUILD / HYBRID
@@ -395,7 +441,7 @@ commander/src/
     hooks/                     # useColonyState, useGitCommits, useLogTail
 ```
 
-61 个测试，9 个测试套件。`npm run build && npm test`。
+89 个测试，12 个测试套件。`npm run build && npm test`。
 
 ---
 

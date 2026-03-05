@@ -11,6 +11,8 @@ const TERMITE_WORKER_PROMPT = [
   "Execute the Termite Protocol worker loop.",
   "Run ./scripts/field-arrive.sh, read .birth, claim the assigned signal, implement it, run tests, commit, and release the claim.",
   "If there is no claimable work, exit cleanly.",
+  "Workspace boundary: use .termite/worker/ as worker context and treat .termite/human/ as human draft zone.",
+  "Do not read or use .termite/human/ unless the current signal explicitly references a file there.",
 ].join(" ");
 
 const RUNTIME_BINARIES: Record<WorkerRuntime, string> = {
@@ -276,6 +278,8 @@ export class OpenCodeLauncher {
       env: {
         ...process.env,
         TERMITE_WORKER_ID: worker.id,
+        TERMITE_WORKER_CONTEXT_ROOT: ".termite/worker",
+        TERMITE_HUMAN_DRAFT_ROOT: ".termite/human",
       },
     });
 

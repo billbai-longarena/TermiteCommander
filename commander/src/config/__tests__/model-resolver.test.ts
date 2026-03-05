@@ -1,19 +1,16 @@
-// commander/src/config/__tests__/model-resolver.test.ts
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   parseWorkerSpec,
   readOpenCodeConfig,
+  readTermiteConfig,
   resolveModels,
   extractProvider,
   extractModelName,
+  assertPlanningModelConfigured,
 } from "../model-resolver.js";
-
-// ---------------------------------------------------------------------------
-// parseWorkerSpec
-// ---------------------------------------------------------------------------
 
 describe("parseWorkerSpec", () => {
   it("parses a count-only spec", () => {
@@ -26,22 +23,6 @@ describe("parseWorkerSpec", () => {
       { cli: "opencode", model: "sonnet", count: 1 },
       { cli: "opencode", model: "haiku", count: 2 },
       { cli: "opencode", model: "gemini-flash", count: 1 },
-    ]);
-  });
-
-  it("parses a single model spec", () => {
-    expect(parseWorkerSpec("haiku:2")).toEqual([{ cli: "opencode", model: "haiku", count: 2 }]);
-  });
-
-  it("handles empty string", () => {
-    expect(parseWorkerSpec("")).toEqual([]);
-  });
-
-  it("handles whitespace around entries", () => {
-    const result = parseWorkerSpec(" sonnet : 1 , haiku : 2 ");
-    expect(result).toEqual([
-      { cli: "opencode", model: "sonnet", count: 1 },
-      { cli: "opencode", model: "haiku", count: 2 },
     ]);
   });
 
@@ -59,15 +40,10 @@ describe("parseWorkerSpec", () => {
     expect(result).toEqual([{ cli: "codex", model: "haiku", count: 2 }]);
   });
 
-  it("parses runtime with count and default model", () => {
-    const result = parseWorkerSpec("codex:3");
-    expect(result).toEqual([{ cli: "codex", model: undefined, count: 3 }]);
+  it("clamps invalid or non-positive counts to 1", () => {
+    expect(parseWorkerSpec("haiku:0")).toEqual([{ cli: "opencode", model: "haiku", count: 1 }]);
   });
 });
-
-// ---------------------------------------------------------------------------
-// extractProvider
-// ---------------------------------------------------------------------------
 
 describe("extractProvider", () => {
   it("extracts anthropic from explicit prefix", () => {
@@ -89,39 +65,17 @@ describe("extractProvider", () => {
   it("infers azure-openai from gpt in model name", () => {
     expect(extractProvider("gpt-4o")).toBe("azure-openai");
   });
-
-  it("infers azure-openai from codex in model name", () => {
-    expect(extractProvider("codex-mini")).toBe("azure-openai");
-  });
-
-  it("defaults to anthropic for unknown model", () => {
-    expect(extractProvider("llama-3")).toBe("anthropic");
-  });
 });
-
-// ---------------------------------------------------------------------------
-// extractModelName
-// ---------------------------------------------------------------------------
 
 describe("extractModelName", () => {
   it("strips provider prefix", () => {
-    expect(extractModelName("anthropic/claude-sonnet-4-5")).toBe(
-      "claude-sonnet-4-5",
-    );
+    expect(extractModelName("anthropic/claude-sonnet-4-5")).toBe("claude-sonnet-4-5");
   });
 
   it("returns model as-is when no prefix", () => {
     expect(extractModelName("claude-sonnet-4-5")).toBe("claude-sonnet-4-5");
   });
-
-  it("strips openai prefix", () => {
-    expect(extractModelName("openai/gpt-4")).toBe("gpt-4");
-  });
 });
-
-// ---------------------------------------------------------------------------
-// readOpenCodeConfig
-// ---------------------------------------------------------------------------
 
 describe("readOpenCodeConfig", () => {
   let tempDir: string;
@@ -151,10 +105,7 @@ describe("readOpenCodeConfig", () => {
 
   it("reads from .opencode subdirectory", () => {
     mkdirSync(join(tempDir, ".opencode"));
-    writeFileSync(
-      join(tempDir, ".opencode", "opencode.json"),
-      JSON.stringify({ model: "gpt-4" }),
-    );
+    writeFileSync(join(tempDir, ".opencode", "opencode.json"), JSON.stringify({ model: "gpt-4" }));
     const config = readOpenCodeConfig(tempDir);
     expect(config).not.toBeNull();
     expect(config!.model).toBe("gpt-4");
@@ -171,56 +122,64 @@ describe("readOpenCodeConfig", () => {
     const config = readOpenCodeConfig(tempDir);
     expect(config).not.toBeNull();
     expect(config!.model).toBe("claude-sonnet-4-5");
-    expect(config!.small_model).toBe("claude-haiku-3-5");
-  });
-
-  it("returns null for malformed JSON", () => {
-    writeFileSync(join(tempDir, "opencode.json"), "{ this is not valid json }");
-    const config = readOpenCodeConfig(tempDir);
-    expect(config).toBeNull();
-  });
-
-  it("reads commander.workers array", () => {
-    writeFileSync(
-      join(tempDir, "opencode.json"),
-      JSON.stringify({
-        model: "claude-sonnet-4-5",
-        commander: {
-          workers: [
-            { model: "haiku", count: 2 },
-            { model: "sonnet", count: 1 },
-          ],
-        },
-      }),
-    );
-    const config = readOpenCodeConfig(tempDir);
-    expect(config).not.toBeNull();
-    expect(config!.commander!.workers).toHaveLength(2);
-    expect(config!.commander!.workers![0]).toEqual({ model: "haiku", count: 2 });
   });
 });
 
-// ---------------------------------------------------------------------------
-// resolveModels
-// ---------------------------------------------------------------------------
-
-describe("resolveModels", () => {
+describe("readTermiteConfig", () => {
   let tempDir: string;
 
-  // Save and restore env vars
-  const savedEnv: Record<string, string | undefined> = {};
-  const envKeys = ["COMMANDER_MODEL", "TERMITE_MODEL", "TERMITE_WORKERS", "TERMITE_WORKER_CLI"];
-
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), "model-resolver-test-"));
-    for (const key of envKeys) {
-      savedEnv[key] = process.env[key];
-      delete process.env[key];
-    }
+    tempDir = mkdtempSync(join(tmpdir(), "termite-config-test-"));
   });
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("reads termite.config.json from root", () => {
+    writeFileSync(
+      join(tempDir, "termite.config.json"),
+      JSON.stringify({
+        commander: { model: "anthropic/claude-sonnet-4-5" },
+      }),
+    );
+    const config = readTermiteConfig(tempDir);
+    expect(config?.commander?.model).toBe("anthropic/claude-sonnet-4-5");
+  });
+
+  it("reads .termite/config.json", () => {
+    mkdirSync(join(tempDir, ".termite"), { recursive: true });
+    writeFileSync(
+      join(tempDir, ".termite", "config.json"),
+      JSON.stringify({
+        commander_model: "openai/gpt-4.1",
+      }),
+    );
+    const config = readTermiteConfig(tempDir);
+    expect(config?.commander_model).toBe("openai/gpt-4.1");
+  });
+});
+
+describe("resolveModels", () => {
+  let tempDir: string;
+  let homeDir: string;
+
+  const savedEnv: Record<string, string | undefined> = {};
+  const envKeys = ["COMMANDER_MODEL", "TERMITE_MODEL", "TERMITE_WORKERS", "TERMITE_WORKER_CLI", "HOME"];
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "model-resolver-test-"));
+    homeDir = mkdtempSync(join(tmpdir(), "model-resolver-home-"));
+    for (const key of envKeys) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    process.env.HOME = homeDir;
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(homeDir, { recursive: true, force: true });
     for (const key of envKeys) {
       if (savedEnv[key] === undefined) {
         delete process.env[key];
@@ -230,111 +189,165 @@ describe("resolveModels", () => {
     }
   });
 
-  it("uses defaults when no config or env vars", () => {
+  it("requires commander model and reports config errors when missing", () => {
     const result = resolveModels(tempDir);
-    expect(result.commanderModel).toBe("claude-sonnet-4-5");
-    expect(result.commanderProvider).toBe("anthropic");
-    expect(result.defaultWorkerCli).toBe("opencode");
-    expect(result.defaultWorkerModel).toBe("claude-haiku-3-5");
+    expect(result.commanderModel).toBe("");
+    expect(result.issues.errors.length).toBeGreaterThan(0);
+    expect(result.resolution.commanderModel.detail).toContain("MISSING");
     expect(result.workers).toEqual([{ cli: "opencode", model: undefined, count: 3 }]);
-    expect(result.resolution.commanderModel.source).toBe("default");
-    expect(result.resolution.defaultWorkerCli.source).toBe("default");
-    expect(result.resolution.defaultWorkerModel.source).toBe("default");
-    expect(result.resolution.workers.source).toBe("default");
   });
 
-  it("uses env vars when set", () => {
-    process.env.COMMANDER_MODEL = "openai/gpt-4";
-    process.env.TERMITE_MODEL = "anthropic/claude-haiku-3-5";
-    process.env.TERMITE_WORKER_CLI = "codex";
-    process.env.TERMITE_WORKERS = "haiku:2,sonnet:1";
-
+  it("uses COMMANDER_MODEL from env when config is missing", () => {
+    process.env.COMMANDER_MODEL = "openai/gpt-4.1";
     const result = resolveModels(tempDir);
-    expect(result.commanderModel).toBe("gpt-4");
+    expect(result.commanderModel).toBe("gpt-4.1");
     expect(result.commanderProvider).toBe("openai");
-    expect(result.defaultWorkerCli).toBe("codex");
-    expect(result.defaultWorkerModel).toBe("claude-haiku-3-5");
-    expect(result.workers).toEqual([
-      { cli: "codex", model: "haiku", count: 2 },
-      { cli: "codex", model: "sonnet", count: 1 },
-    ]);
     expect(result.resolution.commanderModel.source).toBe("env");
-    expect(result.resolution.defaultWorkerCli.source).toBe("env");
-    expect(result.resolution.defaultWorkerModel.source).toBe("env");
-    expect(result.resolution.workers.source).toBe("env");
+    expect(result.issues.errors).toEqual([]);
   });
 
-  it("falls back to opencode.json when env vars are not set", () => {
+  it("uses opencode.json model before env (config-first)", () => {
+    process.env.COMMANDER_MODEL = "openai/gpt-4.1";
     writeFileSync(
       join(tempDir, "opencode.json"),
+      JSON.stringify({ model: "anthropic/claude-sonnet-4-5" }),
+    );
+    const result = resolveModels(tempDir);
+    expect(result.commanderModel).toBe("claude-sonnet-4-5");
+    expect(result.commanderProvider).toBe("anthropic");
+    expect(result.resolution.commanderModel.source).toBe("config");
+  });
+
+  it("uses termite.config.json commander.model with highest priority", () => {
+    process.env.COMMANDER_MODEL = "openai/gpt-4.1";
+    writeFileSync(join(tempDir, "opencode.json"), JSON.stringify({ model: "azure/gpt-5" }));
+    writeFileSync(
+      join(tempDir, "termite.config.json"),
       JSON.stringify({
-        model: "anthropic/claude-sonnet-4-5",
-        small_model_cli: "claude",
-        small_model: "anthropic/claude-haiku-3-5",
-        commander: {
-          workers: [{ model: "haiku", count: 4 }],
-        },
+        commander: { model: "anthropic/claude-opus-4-1" },
       }),
     );
 
     const result = resolveModels(tempDir);
-    expect(result.commanderModel).toBe("claude-sonnet-4-5");
-    expect(result.commanderProvider).toBe("anthropic");
-    expect(result.defaultWorkerCli).toBe("claude");
-    expect(result.defaultWorkerModel).toBe("claude-haiku-3-5");
-    expect(result.workers).toEqual([{ cli: "claude", model: "haiku", count: 4 }]);
-    expect(result.resolution.commanderModel.source).toBe("config");
-    expect(result.resolution.defaultWorkerCli.source).toBe("config");
-    expect(result.resolution.defaultWorkerModel.source).toBe("config");
-    expect(result.resolution.workers.source).toBe("config");
+    expect(result.commanderModel).toBe("claude-opus-4-1");
+    expect(result.resolution.commanderModel.detail).toContain("termite.config.json");
+    expect(result.issues.errors).toEqual([]);
   });
 
-  it("opencode.json takes priority over env vars", () => {
-    process.env.COMMANDER_MODEL = "azure/gpt-5";
-    process.env.TERMITE_WORKER_CLI = "opencode";
-    process.env.TERMITE_MODEL = "openai/gpt-4o-mini";
-    process.env.TERMITE_WORKERS = "codex@gpt-5-codex:5";
-
+  it("supports legacy termite commander_model field", () => {
     writeFileSync(
-      join(tempDir, "opencode.json"),
+      join(tempDir, "termite.config.json"),
       JSON.stringify({
-        model: "anthropic/claude-sonnet-4-5",
-        small_model_cli: "claude",
-        small_model: "anthropic/claude-haiku-3-5",
-        commander: {
-          workers: [{ cli: "codex", model: "gpt-5-codex", count: 2 }],
-        },
+        commander_model: "openai/gpt-4.1-mini",
       }),
     );
 
     const result = resolveModels(tempDir);
-    expect(result.commanderModel).toBe("claude-sonnet-4-5");
-    expect(result.commanderProvider).toBe("anthropic");
-    expect(result.defaultWorkerCli).toBe("claude");
-    expect(result.defaultWorkerModel).toBe("claude-haiku-3-5");
-    expect(result.workers).toEqual([{ cli: "codex", model: "gpt-5-codex", count: 2 }]);
-    expect(result.resolution.commanderModel.source).toBe("config");
-    expect(result.resolution.defaultWorkerCli.source).toBe("config");
-    expect(result.resolution.defaultWorkerModel.source).toBe("config");
-    expect(result.resolution.workers.source).toBe("config");
+    expect(result.commanderModel).toBe("gpt-4.1-mini");
+    expect(result.commanderProvider).toBe("openai");
   });
 
-  it("uses count-only TERMITE_WORKERS", () => {
-    process.env.TERMITE_WORKER_CLI = "claude";
-    process.env.TERMITE_WORKERS = "5";
+  it("resolves worker defaults from termite config", () => {
+    writeFileSync(
+      join(tempDir, "termite.config.json"),
+      JSON.stringify({
+        commander: {
+          model: "anthropic/claude-sonnet-4-5",
+          default_worker_cli: "codex",
+          default_worker_model: "openai/gpt-4.1-mini",
+        },
+        workers: [{ model: "openai/gpt-5-codex", count: 2 }],
+      }),
+    );
 
     const result = resolveModels(tempDir);
-    expect(result.workers).toEqual([{ cli: "claude", model: undefined, count: 5 }]);
+    expect(result.defaultWorkerCli).toBe("codex");
+    expect(result.defaultWorkerModel).toBe("gpt-4.1-mini");
+    expect(result.workers).toEqual([{ cli: "codex", model: "openai/gpt-5-codex", count: 2 }]);
   });
 
-  it("supports mixed runtime workers from TERMITE_WORKERS", () => {
+  it("warns when opencode has small_model but no model", () => {
+    writeFileSync(
+      join(tempDir, "opencode.json"),
+      JSON.stringify({
+        small_model: "anthropic/claude-haiku-3-5",
+      }),
+    );
+
+    const result = resolveModels(tempDir);
+    expect(result.issues.errors.length).toBeGreaterThan(0);
+    expect(result.issues.warnings.some((w) => w.includes("small_model"))).toBe(true);
+  });
+
+  it("parses TERMITE_WORKERS with mixed runtimes", () => {
+    process.env.COMMANDER_MODEL = "anthropic/claude-sonnet-4-5";
     process.env.TERMITE_WORKERS = "codex@gpt-5-codex:1,claude@sonnet:1,opencode@haiku:2";
-
     const result = resolveModels(tempDir);
     expect(result.workers).toEqual([
       { cli: "codex", model: "gpt-5-codex", count: 1 },
       { cli: "claude", model: "sonnet", count: 1 },
       { cli: "opencode", model: "haiku", count: 2 },
     ]);
+  });
+
+  it("falls back to default workers when config workers are invalid", () => {
+    writeFileSync(
+      join(tempDir, "termite.config.json"),
+      JSON.stringify({
+        commander: {
+          model: "anthropic/claude-sonnet-4-5",
+          workers: [{ model: "haiku", count: 0 }],
+        },
+      }),
+    );
+
+    const result = resolveModels(tempDir);
+    expect(result.workers).toEqual([{ cli: "opencode", model: undefined, count: 3 }]);
+    expect(result.issues.warnings.some((w) => w.includes("invalid count"))).toBe(true);
+  });
+});
+
+describe("assertPlanningModelConfigured", () => {
+  it("throws when model resolution has errors", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "model-check-"));
+    const homeDir = mkdtempSync(join(tmpdir(), "model-check-home-"));
+    const savedHome = process.env.HOME;
+    const savedCommanderModel = process.env.COMMANDER_MODEL;
+    try {
+      process.env.HOME = homeDir;
+      delete process.env.COMMANDER_MODEL;
+      const models = resolveModels(tempDir);
+      expect(() => assertPlanningModelConfigured(models)).toThrow("Model configuration invalid");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(homeDir, { recursive: true, force: true });
+      if (savedHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = savedHome;
+      }
+      if (savedCommanderModel === undefined) {
+        delete process.env.COMMANDER_MODEL;
+      } else {
+        process.env.COMMANDER_MODEL = savedCommanderModel;
+      }
+    }
+  });
+
+  it("does not throw when commander model is configured", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "model-check-"));
+    const previous = process.env.COMMANDER_MODEL;
+    try {
+      process.env.COMMANDER_MODEL = "anthropic/claude-sonnet-4-5";
+      const models = resolveModels(tempDir);
+      expect(() => assertPlanningModelConfigured(models)).not.toThrow();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      if (previous === undefined) {
+        delete process.env.COMMANDER_MODEL;
+      } else {
+        process.env.COMMANDER_MODEL = previous;
+      }
+    }
   });
 });

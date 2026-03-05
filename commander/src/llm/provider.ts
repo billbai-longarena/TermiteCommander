@@ -7,6 +7,85 @@ export interface LLMConfig {
   model?: string;
 }
 
+export interface ProviderCredentialStatus {
+  provider: LLMConfig["provider"];
+  ok: boolean;
+  missing: string[];
+  detail: string;
+}
+
+export function checkProviderCredentials(
+  provider: LLMConfig["provider"],
+): ProviderCredentialStatus {
+  if (provider === "openai") {
+    const ok = Boolean(process.env.OPENAI_API_KEY);
+    return {
+      provider,
+      ok,
+      missing: ok ? [] : ["OPENAI_API_KEY"],
+      detail: ok
+        ? "OPENAI_API_KEY detected"
+        : "Missing OPENAI_API_KEY for provider=openai.",
+    };
+  }
+
+  if (provider === "azure-openai") {
+    const missing: string[] = [];
+    if (!process.env.AZURE_OPENAI_API_KEY) missing.push("AZURE_OPENAI_API_KEY");
+    if (!process.env.AZURE_OPENAI_ENDPOINT) missing.push("AZURE_OPENAI_ENDPOINT");
+    return {
+      provider,
+      ok: missing.length === 0,
+      missing,
+      detail:
+        missing.length === 0
+          ? "AZURE_OPENAI_API_KEY + AZURE_OPENAI_ENDPOINT detected"
+          : `Missing ${missing.join(", ")} for provider=azure-openai.`,
+    };
+  }
+
+  const hasStandard = Boolean(process.env.ANTHROPIC_API_KEY);
+  const hasFoundryKey = Boolean(process.env.ANTHROPIC_FOUNDRY_API_KEY);
+  const hasFoundryResource = Boolean(process.env.ANTHROPIC_FOUNDRY_RESOURCE);
+
+  if (hasStandard || (hasFoundryKey && hasFoundryResource)) {
+    return {
+      provider,
+      ok: true,
+      missing: [],
+      detail: hasStandard
+        ? "ANTHROPIC_API_KEY detected"
+        : "ANTHROPIC_FOUNDRY_API_KEY + ANTHROPIC_FOUNDRY_RESOURCE detected",
+    };
+  }
+
+  if (hasFoundryKey && !hasFoundryResource) {
+    return {
+      provider,
+      ok: false,
+      missing: ["ANTHROPIC_FOUNDRY_RESOURCE"],
+      detail:
+        "ANTHROPIC_FOUNDRY_API_KEY is set but ANTHROPIC_FOUNDRY_RESOURCE is missing. " +
+        "Either set ANTHROPIC_FOUNDRY_RESOURCE or use ANTHROPIC_API_KEY.",
+    };
+  }
+
+  return {
+    provider,
+    ok: false,
+    missing: ["ANTHROPIC_API_KEY", "ANTHROPIC_FOUNDRY_API_KEY"],
+    detail:
+      "Missing Anthropic credentials. Set ANTHROPIC_API_KEY, or set " +
+      "ANTHROPIC_FOUNDRY_API_KEY + ANTHROPIC_FOUNDRY_RESOURCE.",
+  };
+}
+
+export function assertProviderCredentials(provider: LLMConfig["provider"]): void {
+  const status = checkProviderCredentials(provider);
+  if (status.ok) return;
+  throw new Error(`LLM credential check failed: ${status.detail}`);
+}
+
 function getAzureOpenAI() {
   const apiKey = process.env.AZURE_OPENAI_API_KEY;
   if (!apiKey) {

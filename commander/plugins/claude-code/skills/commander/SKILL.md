@@ -48,7 +48,7 @@ Two ways to provide design context:
 
 **Option A: From a design document**
 ```bash
-nohup termite-commander plan "<objective>" --plan PLAN.md --colony "$PWD" --run > .commander.log 2>&1 &
+nohup termite-commander plan "<objective>" --plan .termite/worker/PLAN.md --colony "$PWD" --run > .commander.log 2>&1 &
 ```
 
 **Option B: From conversation context**
@@ -90,41 +90,46 @@ termite-commander
 
 ## Model Configuration
 
-When user asks to configure models, help them by reading and writing `opencode.json`.
+When user asks to configure models, prefer `termite.config.json` (Commander-specific), then keep `opencode.json` compatible.
 
 ### Read current config
 ```bash
+termite-commander config bootstrap --from auto
+cat termite.config.json 2>/dev/null || echo "No termite.config.json found"
 cat opencode.json 2>/dev/null || echo "No opencode.json found"
 ```
 
 ### Write/update config
-Read the current `opencode.json` (if it exists), then modify these fields:
+Read current files first, then update `termite.config.json` as the primary Commander config:
 
 ```json
 {
-  "model": "anthropic/claude-sonnet-4-5",
-  "small_model": "anthropic/claude-haiku-3-5",
   "commander": {
+    "model": "anthropic/claude-sonnet-4-5",
+    "default_worker_cli": "opencode",
+    "default_worker_model": "anthropic/claude-haiku-3-5",
     "workers": [
-      { "model": "anthropic/claude-sonnet-4-5", "count": 1 },
-      { "model": "anthropic/claude-haiku-3-5", "count": 2 }
+      { "cli": "opencode", "model": "anthropic/claude-sonnet-4-5", "count": 1 },
+      { "cli": "opencode", "model": "anthropic/claude-haiku-3-5", "count": 2 }
     ]
   }
 }
 ```
 
 **Fields explained:**
-- `model` — strong model for Commander's signal decomposition (default: claude-sonnet-4-5)
-- `small_model` — default weak model for workers (default: claude-haiku-3-5)
-- `commander.workers` — mixed fleet: each entry specifies a model and how many workers to launch
+- `commander.model` — strong model for Commander's signal decomposition (**required**)
+- `commander.default_worker_cli` — default worker runtime (`opencode` / `claude` / `codex`)
+- `commander.default_worker_model` — default weak model for workers
+- `commander.workers` — mixed fleet entries with `{cli, model, count}`
 
 **Recommended: Shepherd Effect config** (1 strong + N weak):
 ```json
 {
   "commander": {
+    "model": "anthropic/claude-sonnet-4-5",
     "workers": [
-      { "model": "anthropic/claude-sonnet-4-5", "count": 1 },
-      { "model": "anthropic/claude-haiku-3-5", "count": 2 }
+      { "cli": "opencode", "model": "anthropic/claude-sonnet-4-5", "count": 1 },
+      { "cli": "opencode", "model": "anthropic/claude-haiku-3-5", "count": 2 }
     ]
   }
 }
@@ -138,7 +143,15 @@ export COMMANDER_MODEL=claude-sonnet-4-5
 export TERMITE_WORKERS=sonnet:1,haiku:2
 ```
 
-Priority: env vars > opencode.json > defaults.
+Priority: termite.config.json > opencode.json > env vars > defaults (except commander model has no default; it must be configured).
+
+Recommended flow:
+```bash
+termite-commander config bootstrap --from auto
+# Optional: if you need to preserve existing fields strictly:
+termite-commander config import --from auto --apply
+termite-commander doctor --config
+```
 
 ## Routing Logic
 
@@ -147,7 +160,7 @@ Priority: env vars > opencode.json > defaults.
 3. User says "stop/halt/停/暂停" → **Stop**
 4. User says "workers/工人/谁在工作" → **Show Workers**
 5. User says "resume/continue/继续" → **Resume**
-6. User says "configure/配置/model/模型" → **Model Configuration**: read opencode.json, help user edit it
+6. User says "configure/配置/model/模型" → **Model Configuration**: run `termite-commander config bootstrap --from auto` as the tool, then edit `termite.config.json` only if needed
 7. User says "watch/monitor/监控" → suggest opening TUI: `termite-commander`
 
 ## Important Notes
@@ -156,6 +169,7 @@ Priority: env vars > opencode.json > defaults.
 - Status snapshots written to `.commander-status.json` on every heartbeat cycle.
 - Use `termite-commander` (no args) to open read-only TUI dashboard in a separate terminal.
 - Commander does NOT do research or design — that's your job. Commander only decomposes and orchestrates.
+- Use `.termite/human/` for unstable drafts and `.termite/worker/` for worker-facing finalized context.
 - **After running `termite-commander install`**, restart Claude Code session for the plugin to take effect.
-- **API keys**: Commander inherits env vars from the current shell. Ensure `ANTHROPIC_API_KEY` is set before launching.
-- **OpenCode required**: Workers are driven by `opencode run`. Install OpenCode first: `npm install -g opencode`.
+- **API keys**: Commander inherits env vars from the current shell. Ensure provider-specific credentials for `commander.model` are set before launching.
+- **Worker runtime required**: install at least one worker CLI (`opencode`, `claude`, or `codex`) used by your configured fleet.

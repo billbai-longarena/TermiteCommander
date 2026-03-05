@@ -213,7 +213,10 @@ Each signal follows **weak-model execution standards**:
 
 - **Node.js 18+**
 - **OpenCode** — [github.com/nicepkg/opencode](https://github.com/nicepkg/opencode) (drives worker agents)
-- **Anthropic API Key** — `export ANTHROPIC_API_KEY=sk-...`
+- **LLM credentials** for your selected decomposition provider:
+  - Anthropic: `ANTHROPIC_API_KEY` (or Foundry pair `ANTHROPIC_FOUNDRY_API_KEY` + `ANTHROPIC_FOUNDRY_RESOURCE`)
+  - OpenAI: `OPENAI_API_KEY`
+  - Azure OpenAI: `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT`
 - **Git**
 
 ### Step 0: Install Commander (one-time, global)
@@ -261,13 +264,15 @@ This installs:
 - `.claude/plugins/termite-commander/` — Claude Code plugin (SessionStart hook + /commander skill)
 - `.opencode/skill/commander/` — OpenCode commander skill
 - `.opencode/skill/termite/` — Termite Protocol skill (workers use this to claim signals and deposit pheromones)
+- `.termite/human/` — human draft zone (excluded from worker context)
+- `.termite/worker/` — worker-facing context zone (default `PLAN.md` location)
 
 After installation, Claude Code recognizes `/commander` and natural language triggers ("deploy termites", "send the colony").
 
 **Step 3** — Design in Claude Code:
 ```
 > Help me design an OAuth2 authentication system for this Express app.
-> Write the architecture plan to PLAN.md.
+> Write the finalized architecture plan to .termite/worker/PLAN.md.
 ```
 Design quality directly determines colony output quality. Invest time here.
 
@@ -282,7 +287,7 @@ export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
 
 **Step 5** — Launch the colony:
 ```
-> /commander Build the auth system from PLAN.md
+> /commander Build the auth system from .termite/worker/PLAN.md
 ```
 Commander handles the full pipeline: detect protocol (install from GitHub if missing) → genesis → signal decomposition → dispatch → launch workers → heartbeat monitoring.
 
@@ -301,16 +306,48 @@ cd ~/your-project && termite-commander
 
 ## Model Configuration
 
-**Priority**: `opencode.json` > environment variables > defaults
+**Priority**: `termite.config.json` > `opencode.json` > environment variables > defaults  
+(`commander` decomposition model has **no default** and must be configured)
 
 | Variable          | Purpose                             | Default             |
 | ----------------- | ----------------------------------- | ------------------- |
-| `COMMANDER_MODEL` | Strong model (signal decomposition) | `claude-sonnet-4-5` |
+| `COMMANDER_MODEL` | Strong model (signal decomposition, env fallback) | `(required)` |
 | `TERMITE_WORKER_CLI` | Default worker runtime (`opencode` / `claude` / `codex`) | `opencode` |
 | `TERMITE_MODEL`   | Default weak model (workers)        | `claude-haiku-3-5`  |
 | `TERMITE_WORKERS` | Fleet spec (`count`, `model:count`, `cli@model:count`) | `3` (3x default)    |
 
+Import and normalize from existing CLI configs (recommended before manual editing):
 ```bash
+# Dry-run: inspect candidates from opencode / claude / codex configs
+termite-commander config import --from auto
+
+# One-shot tool (skill-friendly): import + merge + doctor
+termite-commander config bootstrap --from auto
+
+# Apply into termite.config.json (preserve existing values)
+termite-commander config import --from auto --apply
+
+# Force overwrite existing values in termite.config.json
+termite-commander config import --from auto --apply --force
+
+# Run health check (fails if commander model or provider credentials are missing)
+termite-commander doctor --config
+```
+
+```bash
+# Recommended primary config: termite.config.json
+# {
+#   "commander": {
+#     "model": "anthropic/claude-sonnet-4-5",
+#     "default_worker_cli": "opencode",
+#     "default_worker_model": "anthropic/claude-haiku-3-5",
+#     "workers": [
+#       {"cli":"opencode","model":"anthropic/claude-sonnet-4-5","count":1},
+#       {"cli":"opencode","model":"anthropic/claude-haiku-3-5","count":2}
+#     ]
+#   }
+# }
+
 # Uniform fleet
 export TERMITE_WORKERS=3
 
@@ -352,6 +389,14 @@ termite-commander plan <objective>     Decompose and execute
   --run                                  Full execution mode
   --dispatch                             Dispatch signals only
 termite-commander status [--json]      Colony status
+termite-commander config import         Import/recommend model config from other CLIs
+  --from <auto|opencode|claude|codex>    Source selection (default: auto)
+  --apply                                 Write to termite.config.json
+  --force                                 Overwrite existing fields
+termite-commander config bootstrap      One-shot import+merge+doctor tool (skill-friendly)
+  --from <auto|opencode|claude|codex>    Source selection (default: auto)
+  --force                                 Overwrite existing fields
+termite-commander doctor [--config]     Run diagnostics (non-zero exit on config/credential errors)
 termite-commander workers [--json]     Worker status
 termite-commander stop                 Stop all + cleanup stale state
 termite-commander resume               Resume from halt
@@ -376,7 +421,8 @@ Full-screen terminal dashboard (alternate screen buffer):
 
 ```
 commander/src/
-  config/model-resolver.ts     # opencode.json + env vars → model config
+  config/model-resolver.ts     # termite.config + opencode + env → resolved model config
+  config/importer.ts           # import/recommend config from opencode/claude/codex
   engine/
     pipeline.ts                # 2-phase: classify → decompose
     classifier.ts              # BUILD / HYBRID
@@ -395,7 +441,7 @@ commander/src/
     hooks/                     # useColonyState, useGitCommits, useLogTail
 ```
 
-61 tests across 9 suites. `npm run build && npm test`.
+89 tests across 12 suites. `npm run build && npm test`.
 
 ---
 

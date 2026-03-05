@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import type { Plan } from "../../colony/plan-writer.js";
 
 const callLLMMock = vi.fn();
+const assertPlanningModelConfiguredMock = vi.fn();
+const assertProviderCredentialsMock = vi.fn();
 
 vi.mock("../../llm/provider.js", () => ({
   callLLM: (...args: unknown[]) => callLLMMock(...args),
@@ -12,6 +14,8 @@ vi.mock("../../llm/provider.js", () => ({
     provider: "anthropic",
     model: "claude-sonnet-4-5",
   }),
+  assertProviderCredentials: (...args: unknown[]) =>
+    assertProviderCredentialsMock(...args),
 }));
 
 vi.mock("../../config/model-resolver.js", () => ({
@@ -27,7 +31,13 @@ vi.mock("../../config/model-resolver.js", () => ({
       defaultWorkerModel: { source: "default", detail: "claude-haiku-3-5" },
       workers: { source: "default", detail: "1 x claude-haiku-3-5" },
     },
+    issues: {
+      warnings: [],
+      errors: [],
+    },
   }),
+  assertPlanningModelConfigured: (...args: unknown[]) =>
+    assertPlanningModelConfiguredMock(...args),
 }));
 
 import { Pipeline } from "../pipeline.js";
@@ -45,6 +55,8 @@ describe("Pipeline", () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "pipeline-test-"));
     vi.clearAllMocks();
+    assertPlanningModelConfiguredMock.mockImplementation(() => undefined);
+    assertProviderCredentialsMock.mockImplementation(() => undefined);
   });
 
   afterEach(() => {
@@ -64,6 +76,14 @@ describe("Pipeline", () => {
     expect(plan.signals[0].id).toBe("S-001");
     expect(plan.signals[0].parentId).toBeNull();
     expect(plan.signals[0].title).toContain("Create hello world endpoint");
+  });
+
+  it("blocks planning when model config is invalid", () => {
+    assertPlanningModelConfiguredMock.mockImplementation(() => {
+      throw new Error("Model configuration invalid");
+    });
+
+    expect(() => createPipeline()).toThrow("Model configuration invalid");
   });
 
   it("remaps parentId correctly after signal reordering", async () => {

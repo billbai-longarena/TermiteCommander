@@ -1,7 +1,7 @@
 # WIP — Termite Commander 开发交接
 
 **Last updated**: 2026-03-05
-**Session**: 配置优先级修复 + 混合 CLI 工人适配 + 发布收口
+**Session**: 健壮性评估 + OpenClaw 兼容性调研 + 白蚁协议互补集成设计
 
 ---
 
@@ -66,15 +66,90 @@
 - 文档同步：`README.md`、`README.zh-CN.md`、`CLAUDE.md` 已覆盖新配置和混合 CLI (`518c724`, `02ce74b`)
 - npm 发布：`termite-commander@0.1.1` 已发布；`commander/package.json` 当前本地版本为 `0.1.2`（待下一次发布）
 
+### 8. 2026-03-05 issue 收敛（已完成）
+- GitHub issue #2（模型配置）已对齐：新增 `termite.config.json` 主配置流，解析优先级升级为  
+  `termite.config.json > opencode.json > env > default`
+- 分解模型改为**硬性必配**：若缺失 `commander.model`（或等价来源）直接阻断 `plan`，不再允许带缺模型继续分解
+- 新增配置诊断：`resolveModels()` 输出 `issues.errors/warnings`，`install/status` 可见
+- 新增工作区边界隔离：自动初始化 `.termite/human`（草稿区）和 `.termite/worker`（工人上下文区），并写入策略文件与 `.gitignore` 规则
+- 默认设计文档路径优化：`plan` 无 `--plan` 时优先使用 `.termite/worker/PLAN.md`
+- 测试覆盖扩展：新增 workspace-boundary tests；model-resolver tests 重写覆盖新优先级与必配校验；总测试数增至 63
+
+### 9. 2026-03-05 外部 CLI 配置导入与诊断（已完成）
+- 新增 `commander/src/config/importer.ts`：支持从 `opencode` / `claude` / `codex` 配置读取模型信息并给出推荐
+- 新增 CLI：
+  - `termite-commander config import --from auto|opencode|claude|codex [--apply] [--force] [--json]`
+  - `termite-commander doctor --config [--json]`
+- 自动来源选择：按置信度+优先级选择最佳来源，并输出候选来源的诊断信息（info/warning/error）
+- 合并策略：默认“配置优先”保留现有 `termite.config.json` 字段；`--force` 可覆盖
+- Codex/Claude 兼容增强：
+  - Claude 支持 `model/defaultModel/default_model/defaults.model/...` 等字段
+  - Codex 支持 top-level + section TOML 字段读取（`model/default_model/defaults` 等）
+- 测试新增：
+  - `src/config/__tests__/importer.test.ts`（10 tests）
+  - 总测试数提升到 **73 tests / 11 suites**
+
+### 10. 2026-03-05 用户体验可靠性复查（已完成）
+- 端到端冒烟路径复测：`install -> config bootstrap -> doctor -> status -> plan`
+- 关键修复：增加 **LLM 凭证预检**
+  - `doctor --config` 现在同时检查"模型配置 + provider 凭证"，缺失时非 0 退出并给出缺失 env var
+  - `config bootstrap` 现在内置 doctor 凭证检查，避免"导入成功但无法运行"的假阳性
+  - `Pipeline` 在执行前做凭证断言，缺失凭证时直接阻断 `plan`（不再静默退化）
+- 状态可见性增强：
+  - `status` 新增 `Protocol: INSTALLED/MISSING`，协议缺失时给出 auto-install 提示
+  - `status --json` 新增 `protocolInstalled` 字段
+- 文档同步：
+  - 中英文 README、CLAUDE、skills、commander README 均更新凭证检查与新行为说明
+- 测试补充：
+  - `src/llm/__tests__/provider.test.ts` 扩展凭证检查用例
+  - 总测试数提升到 **77 tests / 11 suites**
+
+### 11. 2026-03-05 健壮性评估（已完成）
+- 对项目全部 ~4,800 行生产代码逐模块评估，输出详细报告
+- 核心发现：
+  - **优势**: 类型安全彻底 (strict + 无 any)、配置系统成熟 (26 tests)、容错设计贯穿 (fallback + circuit breaker)
+  - **关键缺口**: opencode-launcher.ts (400 行零测试)、CLI 入口 (575 行零测试)、TUI (710 行零测试)
+  - **成熟度判定**: Beta 阶段，核心引擎可靠，集成层需补测试
+- 输出文档: `docs/plans/2026-03-05-robustness-assessment.md`
+
+### 12. 2026-03-05 OpenClaw 兼容性调研（已完成）
+- 深度探索 `~/Desktop/openclaw` 项目（多通道 AI 网关，Node.js >= 22.12.0）
+- 关键发现：
+  - CLI 核心命令: `openclaw agent --message "<prompt>" [--agent <id>] [--json]`
+  - **两个关键差异**: 无 `--model` 标志（模型绑定在 agent config）、无工作目录标志
+  - 本质区别: openclaw 是**多通道 AI 网关**，非直接编码 Agent
+- 适配方案评估：
+  - 方案 A: `--local` 模式 + 预配置（简单但不灵活）
+  - 方案 B: Gateway + Agent Binding（**推荐**，model 字段复用为 agent-id）
+- 10 个代码扩展点已标注（类型定义 → 二进制注册 → 正则 → dispatch → 实现）
+- 输出文档: `docs/plans/2026-03-05-openclaw-integration-assessment.md`
+
+### 13. 2026-03-05 白蚁协议 vs OpenClaw 协调机制对比（已完成）
+- 白蚁协议: **Stigmergy（间接协调）** — Agent 之间永不通信，通过共享环境交流
+- OpenClaw: **Actor Model（直接协调）** — Agent 发消息、spawn 子 Agent、级联管理
+- OpenClaw 没有白蚁协议的三个核心能力: 环境自动代谢、知识涌现 (observation → rule)、Shepherd Effect
+- 结论: 两者互补而非替代——OpenClaw 当 Worker 运行时，白蚁协议负责协调
+
+### 14. 2026-03-05 OpenClaw + 白蚁协议互补集成设计（已完成）
+- 三层集成架构:
+  - **L1 Worker Runtime**: Commander 通过 `openclaw agent` 分发信号
+  - **L2 Protocol Native**: 利用 OpenClaw 5 个 Plugin Hook 在 Agent 生命周期注入白蚁操作（arrive → .birth → claim → pheromone → cycle）
+  - **L3 Capability Fusion**: OpenClaw 独有能力反哺协议（ALARM 多通道推送、蚁群知识语义搜索、Subagent 映射 Signal 分解树、Thread Binding 变 Signal 讨论区）
+- 设计了 `openclaw-termite-plugin` 结构: 5 hooks + 4 tools + 2 lib
+- 7 项新涌现能力: 聊天影响 signal、语义搜索历史知识、运行时 steer 转向、ALARM 实时推送、请求去重、Signal 讨论线程、跨运行时混合编队
+- 5 阶段实施路径: Plugin 骨架 → Tools 注册 → 多通道桥接 → 语义记忆 → Subagent 编排融合
+- 输出文档: `docs/plans/2026-03-05-openclaw-termite-protocol-integration.md`
+
 ---
 
 ## 当前状态
 
-- **61 tests passing**, 9 test suites（`cd commander && npm test`）
+- **77 tests passing**, 11 test suites（`cd commander && npm test`）
 - **Build clean**（`cd commander && npm run build`）
-- 最新已推送提交：`02ce74b`（mixed opencode/claude/codex worker runtimes）
+- 最新已推送提交：`afa0574`（npm install/update/publish practices）
 - Commander CLI: install / plan / status / stop / workers / resume / watch / TUI
-- 文档已覆盖：配置优先级、模型来源反馈、混合 CLI 工人编排
+- Commander CLI 已新增：`config import` / `doctor`
+- 文档已覆盖：配置优先级、模型来源反馈、混合 CLI 工人编排、workspace 边界隔离、外部 CLI 配置导入诊断
 
 ---
 
@@ -91,37 +166,34 @@
 
 ## 已知问题 & 下一步
 
-### 需要实际端到端测试
-- Commander v2 的完整流程还没有在真实项目上跑过
-- 需要在 sage 或其他项目上测试: install → design → /commander → TUI → 完成
-- 关注点: LLM 调用是否正常、信号分解质量、worker 启动、心跳、熔断
+### 高优先级（健壮性评估发现）
+- **opencode-launcher.ts 零测试** (400 行) — 进程管理、session 提取、运行时检查全部裸奔
+- **Worker 进程无超时机制** — 可能无限挂起
+- **Worker 崩溃无自动恢复** — 静默失败
+- **状态文件写入非原子** — 并发读写可能损坏
+- **端到端测试**: Commander v2 的完整流程还没有在真实项目上跑过
 
-### TUI 待改进
-- `listSignals()` 的 SQLite 查询可能需要适配不同版本的 termite.db schema
-- git commit feed 在大仓库可能慢（当前 `git log -5`，应该没问题）
-- TUI 在非 TTY 环境报错（已有 guard，但 sage 测试时遇到过）
+### 中优先级
+- CLI 入口 (575 行) 和 TUI (710 行) 零测试
+- Heartbeat 循环逻辑零测试
+- LLM 调用无重试 (exponential backoff)
+- 无结构化日志 (全部 console.log/error)
+- DB 查询失败静默回退零值
 
-### 代码结构待清理
-- `src/colony/opencode-launcher.ts` 现已承载多运行时启动逻辑，文件名与职责不一致
-- 可考虑重命名为 `worker-launcher.ts` 并保留兼容导出
+### OpenClaw 集成（待决策）
+- **适配方案**: 推荐方案 B (Gateway + Agent Binding)，`model` 字段复用为 `agent-id`
+- **10 个扩展点已标注**: 类型定义 → 二进制注册 → 正则 → dispatch → 实现
+- **互补集成设计已完成**: 三层架构 (L1 Runtime / L2 Protocol Native / L3 Capability Fusion)
+- **待决策**: 是否启动实现；优先 L1 (Worker Runtime) 还是直接做 L2 (Protocol Native Plugin)
 
-### 信号分解质量
-- decomposer prompt 经过设计但未经大量实测
-- 弱模型信号标准（原子性、自包含、可验证）需要在实际蚁群中验证
-- 信号的 `nextHint` 字段对弱模型执行质量影响最大，需要观察
-
-### 模型配置
-- opencode.json 的 `commander.workers` 字段是自定义扩展，不是 OpenCode 官方 schema
-- 需要确认 opencode.json 加了自定义字段后 OpenCode 自身是否报错
-
-### 协议自动安装
-- 从 GitHub clone 安装协议的路径需要网络访问
-- 本地 TermiteProtocol 路径依赖于 TermiteCommander 仓库结构完整
-
-### Shepherd Effect 在 Commander 中的应用
-- 当前 Commander 的混合模型配置只是启动时指定不同 model
-- Shepherd Effect 需要强模型工人先工作、留下信息素模板
-- 可能需要让 Commander 按顺序启动: 先启强模型 worker，等它完成几个信号后再启弱模型
+### 遗留问题
+- `src/colony/opencode-launcher.ts` 文件名与职责不一致，应重命名为 `worker-launcher.ts`
+- decomposer prompt 未经大量实测，弱模型信号标准需在实际蚁群中验证
+- opencode.json 的 `commander.workers` 字段是自定义扩展，需确认 OpenCode 是否报错
+- 从 GitHub clone 安装协议需要网络访问
+- Shepherd Effect 需要顺序启动强/弱模型工人（当前未实现）
+- TUI 在非 TTY 环境可能报错
+- `listSignals()` 可能需要适配不同版本的 termite.db schema
 
 ---
 
@@ -133,3 +205,8 @@
 - `docs/plans/2026-03-04-commander-v2-redesign.md` — v2 重构设计
 - `docs/plans/2026-03-04-commander-v2-implementation.md` — v2 实现计划
 - `docs/plans/2026-03-04-termite-commander-build-record.md` — v1 构建记录
+- `docs/plans/2026-03-05-robustness-assessment.md` — 健壮性评估报告
+- `docs/plans/2026-03-05-openclaw-integration-assessment.md` — OpenClaw Worker Runtime 兼容性评估
+- `docs/plans/2026-03-05-openclaw-termite-protocol-integration.md` — OpenClaw + 白蚁协议互补集成设计
+- `docs/plans/2026-03-05-distribution-improvement-design.md` — 分发改进设计
+- `docs/plans/2026-03-05-distribution-improvement.md` — 分发改进实施

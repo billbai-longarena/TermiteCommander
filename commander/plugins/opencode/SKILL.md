@@ -13,10 +13,14 @@ Decomposes objectives into atomic signals that weak models (haiku-class) can exe
 
 | Intent | Command |
 |--------|---------|
-| Plan + run (with design doc) | `nohup termite-commander plan "<obj>" --plan PLAN.md --colony "$PWD" --run > .commander.log 2>&1 &` |
+| Plan + run (with design doc) | `nohup termite-commander plan "<obj>" --plan .termite/worker/PLAN.md --colony "$PWD" --run > .commander.log 2>&1 &` |
 | Plan + run (with context) | `nohup termite-commander plan "<obj>" --context "<summary>" --colony "$PWD" --run > .commander.log 2>&1 &` |
 | Status | `termite-commander status --colony "$PWD"` |
 | Status JSON | `termite-commander status --colony "$PWD" --json` |
+| Config bootstrap | `termite-commander config bootstrap --from auto --colony "$PWD"` |
+| Config import (dry-run) | `termite-commander config import --from auto --colony "$PWD"` |
+| Config import (apply) | `termite-commander config import --from auto --apply --colony "$PWD"` |
+| Doctor | `termite-commander doctor --config --colony "$PWD"` |
 | Workers | `termite-commander workers --colony "$PWD"` |
 | Stop | `termite-commander stop --colony "$PWD"` |
 | Resume | `termite-commander resume --colony "$PWD"` |
@@ -33,21 +37,35 @@ Signals must be:
 
 ## Model Config
 
-```bash
-# Commander (strong model for decomposition)
-export COMMANDER_MODEL=claude-sonnet-4-5
-
-# Workers (uniform)
-export TERMITE_WORKERS=3
-export TERMITE_MODEL=claude-haiku-3-5
-
-# Workers (mixed)
-export TERMITE_WORKERS=sonnet:1,haiku:2,gemini-flash:1
+```json
+// termite.config.json (recommended)
+{
+  "commander": {
+    "model": "anthropic/claude-sonnet-4-5",
+    "default_worker_cli": "opencode",
+    "default_worker_model": "anthropic/claude-haiku-3-5",
+    "workers": [
+      { "cli": "opencode", "model": "anthropic/claude-sonnet-4-5", "count": 1 },
+      { "cli": "opencode", "model": "anthropic/claude-haiku-3-5", "count": 2 }
+    ]
+  }
+}
 ```
 
-Falls back to `opencode.json` fields: `model`, `small_model`, `commander.workers`.
+Commander model is required. Resolution priority:
+`termite.config.json > opencode.json > env vars > defaults`
+(except commander model has no default and must be explicitly set).
+
+Recommended setup flow:
+```bash
+termite-commander config bootstrap --from auto
+```
+
+`doctor` also checks provider credentials for `commander.model` and exits non-zero if required env vars are missing.
 
 ## Status Files
 
 - `commander.lock` — `{ pid, startedAt, objective }`. Presence = Commander running.
 - `.commander-status.json` — heartbeat snapshot: signal counts, worker states, model info.
+- `.termite/human/` — human draft zone (worker should ignore).
+- `.termite/worker/` — worker-facing context zone.
