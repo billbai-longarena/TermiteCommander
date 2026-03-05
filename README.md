@@ -1,6 +1,7 @@
+[中文文档](README.zh-CN.md)
+
 # Termite Commander
 
-**让一群便宜的 AI 模型替你写代码，由一个聪明的模型指挥。**
 **A swarm of cheap AI models writes your code, directed by one smart model.**
 
 ---
@@ -190,7 +191,7 @@ Each signal follows **weak-model execution standards**:
           ▼          ▼          ▼
      ┌─────────┐ ┌─────────┐ ┌─────────┐
      │ Sonnet  │ │ Haiku   │ │ Haiku   │
-     │ (hard)  │ │ (routine)│ │(routine)│
+     │ (hard)  │ │(routine)│ │(routine)│
      └────┬────┘ └────┬────┘ └────┬────┘
           │          │          │
      claim → execute → commit → deposit pheromone
@@ -217,69 +218,68 @@ Each signal follows **weak-model execution standards**:
 
 ### Step 0: Install Commander (one-time, global)
 
-Commander 是全局 CLI 工具，安装一次，任何项目都能用。
 Commander is a global CLI tool. Install once, use in any project.
 
 ```bash
-# 推荐：npm 一键安装
+# Recommended: install via npm
 npm install -g termite-commander
 
-# 或：一键脚本（自动检测 npm，失败则 clone + build）
+# Or: one-line install script (auto-detects npm, falls back to clone + build)
 curl -fsSL https://raw.githubusercontent.com/billbai-longarena/TermiteCommander/master/install.sh | bash
 ```
 
-验证安装：
+Verify the installation:
 ```bash
 termite-commander --version
 ```
 
-> **关于 Termite Protocol**：不需要手动安装。Commander 首次运行 `--run` 时自动检测，如果目标项目没有白蚁协议，Commander 会自动从 GitHub 克隆并安装。
+> **About Termite Protocol**: No manual installation needed. When Commander first runs with `--run`, it auto-detects whether the target project has the protocol installed. If not, Commander automatically clones and installs it from GitHub.
 
 ### 7-Step Workflow
 
-**Step 1** — 进入项目，启动 Claude Code（或 OpenCode）：
+**Step 1** — Enter your project and start Claude Code (or OpenCode):
 ```bash
 cd ~/your-project
 claude    # or: opencode
 ```
 
-**Step 2** — 安装 Commander skills 到项目（每个项目一次）：
+**Step 2** — Install Commander skills into the project (once per project):
 ```bash
 termite-commander install --colony .
 ```
-安装到项目的内容：
-- `.claude/plugins/termite-commander/` — Claude Code 插件（SessionStart hook + /commander skill）
-- `.opencode/skill/commander/` — OpenCode 的 commander skill
-- `.opencode/skill/termite/` — 白蚁协议 skill（工人用来认领信号、沉积信息素）
+This installs:
+- `.claude/plugins/termite-commander/` — Claude Code plugin (SessionStart hook + /commander skill)
+- `.opencode/skill/commander/` — OpenCode commander skill
+- `.opencode/skill/termite/` — Termite Protocol skill (workers use this to claim signals and deposit pheromones)
 
-安装后 Claude Code 识别 `/commander` 和自然语言（"让蚁群干活"、"deploy termites"）。
+After installation, Claude Code recognizes `/commander` and natural language triggers ("deploy termites", "send the colony").
 
-**Step 3** — 在 Claude Code 中做设计：
+**Step 3** — Design in Claude Code:
 ```
 > Help me design an OAuth2 authentication system for this Express app.
 > Write the architecture plan to PLAN.md.
 ```
-设计质量直接决定蚁群产出质量。花时间在这步。
+Design quality directly determines colony output quality. Invest time here.
 
-**Step 4** — 配置工人模型（可选，有默认值）：
+**Step 4** — Configure worker models (optional, has defaults):
 ```bash
-# 默认: 3 个 Haiku 工人, Sonnet 做信号分解
-# 推荐: 1 强 + N 弱 (Shepherd Effect)
+# Default: 3 Haiku workers, Sonnet for signal decomposition
+# Recommended: 1 strong + N weak (Shepherd Effect)
 export TERMITE_WORKERS=sonnet:1,haiku:2
 ```
 
-**Step 5** — 启动蚁群：
+**Step 5** — Launch the colony:
 ```
-> /commander 按照PLAN.md开始施工
+> /commander Build the auth system from PLAN.md
 ```
-Commander 自动完成全链路：检测白蚁协议（没有则从 GitHub 安装）→ 创世 → 信号分解 → 发布 → 启动工人 → 心跳监控。
+Commander handles the full pipeline: detect protocol (install from GitHub if missing) → genesis → signal decomposition → dispatch → launch workers → heartbeat monitoring.
 
-**Step 6** — 另开终端看 TUI 仪表盘：
+**Step 6** — Open another terminal for the TUI dashboard:
 ```bash
 cd ~/your-project && termite-commander
 ```
 
-**Step 7** — 蚁群完成后自动停止。查看结果：
+**Step 7** — The colony auto-stops when complete. Review results:
 ```
 > /commander status
 > Read HALT.md and summarize what the colony accomplished
