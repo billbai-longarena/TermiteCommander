@@ -90,24 +90,16 @@ termite-commander
 
 ## Model Configuration
 
-Commander reads model config from environment variables and opencode.json:
+When user asks to configure models, help them by reading and writing `opencode.json`.
 
-**Commander model** (strong, for signal decomposition):
+### Read current config
 ```bash
-export COMMANDER_MODEL=claude-sonnet-4-5
+cat opencode.json 2>/dev/null || echo "No opencode.json found"
 ```
 
-**Worker models** (weak/mixed, for execution):
-```bash
-# Uniform: 3 workers with same model
-export TERMITE_WORKERS=3
-export TERMITE_MODEL=claude-haiku-3-5
+### Write/update config
+Read the current `opencode.json` (if it exists), then modify these fields:
 
-# Mixed: different models
-export TERMITE_WORKERS=sonnet:1,haiku:2,gemini-flash:1
-```
-
-Or configure in `opencode.json`:
 ```json
 {
   "model": "anthropic/claude-sonnet-4-5",
@@ -121,6 +113,33 @@ Or configure in `opencode.json`:
 }
 ```
 
+**Fields explained:**
+- `model` — strong model for Commander's signal decomposition (default: claude-sonnet-4-5)
+- `small_model` — default weak model for workers (default: claude-haiku-3-5)
+- `commander.workers` — mixed fleet: each entry specifies a model and how many workers to launch
+
+**Recommended: Shepherd Effect config** (1 strong + N weak):
+```json
+{
+  "commander": {
+    "workers": [
+      { "model": "anthropic/claude-sonnet-4-5", "count": 1 },
+      { "model": "anthropic/claude-haiku-3-5", "count": 2 }
+    ]
+  }
+}
+```
+
+Workers are passed to OpenCode via `opencode run --model <model>`. The model format is `provider/model` (e.g., `anthropic/claude-haiku-3-5`).
+
+### Alternative: environment variables (temporary, per-session)
+```bash
+export COMMANDER_MODEL=claude-sonnet-4-5
+export TERMITE_WORKERS=sonnet:1,haiku:2
+```
+
+Priority: env vars > opencode.json > defaults.
+
 ## Routing Logic
 
 1. User says "plan/start/施工/干活/deploy" + objective → **Start Colony Work**
@@ -128,7 +147,8 @@ Or configure in `opencode.json`:
 3. User says "stop/halt/停/暂停" → **Stop**
 4. User says "workers/工人/谁在工作" → **Show Workers**
 5. User says "resume/continue/继续" → **Resume**
-6. User says "configure model/配置模型" → **Model Configuration** guidance
+6. User says "configure/配置/model/模型" → **Model Configuration**: read opencode.json, help user edit it
+7. User says "watch/monitor/监控" → suggest opening TUI: `termite-commander`
 
 ## Important Notes
 
@@ -136,3 +156,6 @@ Or configure in `opencode.json`:
 - Status snapshots written to `.commander-status.json` on every heartbeat cycle.
 - Use `termite-commander` (no args) to open read-only TUI dashboard in a separate terminal.
 - Commander does NOT do research or design — that's your job. Commander only decomposes and orchestrates.
+- **After running `termite-commander install`**, restart Claude Code session for the plugin to take effect.
+- **API keys**: Commander inherits env vars from the current shell. Ensure `ANTHROPIC_API_KEY` is set before launching.
+- **OpenCode required**: Workers are driven by `opencode run`. Install OpenCode first: `npm install -g opencode`.

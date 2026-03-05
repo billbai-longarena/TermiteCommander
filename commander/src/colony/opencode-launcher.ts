@@ -128,8 +128,25 @@ export class OpenCodeLauncher {
   /**
    * Run opencode for a worker. First call creates session, subsequent calls continue it.
    */
+  /**
+   * Check if opencode CLI is available.
+   */
+  async checkOpenCode(): Promise<boolean> {
+    try {
+      await execFileAsync("opencode", ["--version"], { timeout: 5000 });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private async runOpenCode(worker: OpenCodeWorker, prompt: string): Promise<void> {
     const args = ["run", prompt, "--format", "json", "--dir", resolve(this.config.colonyRoot)];
+
+    // Pass model to opencode via --model flag (format: provider/model or just model name)
+    if (worker.model) {
+      args.push("--model", worker.model);
+    }
 
     // Continue existing session if we have one
     if (worker.sessionId) {

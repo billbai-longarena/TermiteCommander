@@ -273,6 +273,17 @@ export class Pipeline {
   }
 
   async runWithHeartbeats(plan: Plan): Promise<void> {
+    // Pre-flight checks
+    const hasOpenCode = await this.launcher.checkOpenCode();
+    if (!hasOpenCode) {
+      console.error(
+        "[commander] OpenCode CLI not found.\n" +
+          "Install it: npm install -g opencode\n" +
+          "Or see: https://github.com/nicepkg/opencode",
+      );
+      throw new Error("OpenCode CLI not installed");
+    }
+
     // Ensure protocol + genesis before starting
     await this.ensureProtocol();
     await this.ensureGenesis();
