@@ -1,17 +1,40 @@
 {
   "name": "termite-commander",
   "version": "0.1.0",
+  "description": "Autonomous orchestration engine for the Termite Protocol",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
     "termite-commander": "dist/index.js"
   },
+  "files": [
+    "dist/",
+    "skills/",
+    "plugins/"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
   },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/billbai-longarena/TermiteCommander.git",
+    "directory": "commander"
+  },
+  "keywords": [
+    "termite",
+    "orchestration",
+    "ai-agents",
+    "colony",
+    "multi-model"
+  ],
+  "license": "MIT",
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
     "@ai-sdk/openai": "^1.0.0",
