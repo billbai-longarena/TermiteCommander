@@ -55,21 +55,37 @@ export class OpenCodeLauncher {
    * Also installs Commander OpenCode skill and Claude Code plugin.
    */
   installSkills(): void {
-    // 1. Existing: copy termite protocol skills → .opencode/skill/termite/
+    let installedCount = 0;
+
+    // 1. Copy termite protocol skills → .opencode/skill/termite/
     const termiteDest = join(this.config.colonyRoot, ".opencode", "skill", "termite");
     mkdirSync(termiteDest, { recursive: true });
 
     const files = ["SKILL.md", "arrive.md", "deposit.md", "molt.md"];
+    const missingFiles: string[] = [];
     for (const file of files) {
       const src = join(this.config.skillSourceDir, file);
       const dst = join(termiteDest, file);
       if (existsSync(src)) {
         copyFileSync(src, dst);
+        installedCount++;
+      } else {
+        missingFiles.push(file);
       }
     }
-    console.log(`[launcher] Installed termite skills to ${termiteDest}`);
 
-    // Resolve plugins base dir (relative to skillSourceDir: ../plugins)
+    if (missingFiles.length === files.length) {
+      throw new Error(
+        `Termite skills source not found at ${this.config.skillSourceDir}. ` +
+        `Reinstall termite-commander: npm install -g termite-commander`
+      );
+    }
+    if (missingFiles.length > 0) {
+      console.warn(`[launcher] Warning: missing skill files: ${missingFiles.join(", ")}`);
+    }
+    console.log(`[launcher] Installed ${installedCount} termite skills to ${termiteDest}`);
+
+    // Resolve plugins base dir (relative to skillSourceDir: ../../plugins)
     const pluginsBase = resolve(this.config.skillSourceDir, "../../plugins");
 
     // 2. Copy OpenCode commander skill → .opencode/skill/commander/
@@ -78,6 +94,9 @@ export class OpenCodeLauncher {
       const opencodeDest = join(this.config.colonyRoot, ".opencode", "skill", "commander");
       this.copyDirRecursive(opencodeSrc, opencodeDest);
       console.log(`[launcher] Installed commander skill to ${opencodeDest}`);
+      installedCount++;
+    } else {
+      console.warn(`[launcher] Warning: OpenCode skill not found at ${opencodeSrc}`);
     }
 
     // 3. Copy Claude Code plugin → .claude/plugins/termite-commander/
@@ -86,7 +105,12 @@ export class OpenCodeLauncher {
       const claudeCodeDest = join(this.config.colonyRoot, ".claude", "plugins", "termite-commander");
       this.copyDirRecursive(claudeCodeSrc, claudeCodeDest);
       console.log(`[launcher] Installed Claude Code plugin to ${claudeCodeDest}`);
+      installedCount++;
+    } else {
+      console.warn(`[launcher] Warning: Claude Code plugin not found at ${claudeCodeSrc}`);
     }
+
+    console.log(`[launcher] Installation complete: ${installedCount} components installed`);
   }
 
   /**

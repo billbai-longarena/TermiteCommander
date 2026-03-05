@@ -33,7 +33,21 @@ program
       workerSpecs: [],
       defaultWorkerModel: "",
     });
-    launcher.installSkills();
+
+    try {
+      launcher.installSkills();
+    } catch (err: any) {
+      console.error(`\nInstallation failed: ${err.message}`);
+      process.exit(1);
+    }
+
+    // Check OpenCode availability
+    const hasOpenCode = await launcher.checkOpenCode();
+    if (!hasOpenCode) {
+      console.warn("\nWarning: 'opencode' CLI not found in PATH.");
+      console.warn("Workers need OpenCode to run. Install: https://github.com/nicepkg/opencode");
+    }
+
     console.log("\nCommander skills installed. Available commands:");
     console.log("  Claude Code: /commander <objective>");
     console.log("  OpenCode:    /commander <objective>");
