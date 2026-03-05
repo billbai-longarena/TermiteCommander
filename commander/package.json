@@ -1,6 +1,6 @@
 {
   "name": "termite-commander",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Autonomous orchestration engine for the Termite Protocol",
   "type": "module",
   "main": "dist/index.js",
@@ -9,11 +9,13 @@
   },
   "files": [
     "dist/",
+    "README.md",
     "skills/",
     "plugins/"
   ],
   "scripts": {
-    "build": "tsc",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",

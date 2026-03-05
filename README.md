@@ -211,7 +211,7 @@ Each signal follows **weak-model execution standards**:
 
 ### Prerequisites
 
-- **Node.js 22+**
+- **Node.js 18+**
 - **OpenCode** — [github.com/nicepkg/opencode](https://github.com/nicepkg/opencode) (drives worker agents)
 - **Anthropic API Key** — `export ANTHROPIC_API_KEY=sk-...`
 - **Git**
@@ -224,13 +224,23 @@ Commander is a global CLI tool. Install once, use in any project.
 # Recommended: install via npm
 npm install -g termite-commander
 
-# Or: one-line install script (auto-detects npm, falls back to clone + build)
+# Or: one-line install script (tries npm first, falls back to git checkout + global install)
 curl -fsSL https://raw.githubusercontent.com/billbai-longarena/TermiteCommander/master/install.sh | bash
 ```
 
 Verify the installation:
 ```bash
 termite-commander --version
+```
+
+Update to the latest version:
+```bash
+npm update -g termite-commander
+```
+
+Check outdated global packages:
+```bash
+npm outdated -g --depth=0
 ```
 
 > **About Termite Protocol**: No manual installation needed. When Commander first runs with `--run`, it auto-detects whether the target project has the protocol installed. If not, Commander automatically clones and installs it from GitHub.

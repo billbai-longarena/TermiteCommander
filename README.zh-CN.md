@@ -211,7 +211,7 @@ PLAN.md（你的设计方案）
 
 ### 前置条件
 
-- **Node.js 22+**
+- **Node.js 18+**
 - **OpenCode** — [github.com/nicepkg/opencode](https://github.com/nicepkg/opencode)（驱动工人 Agent）
 - **Anthropic API Key** — `export ANTHROPIC_API_KEY=sk-...`
 - **Git**
@@ -224,13 +224,23 @@ Commander 是全局 CLI 工具，安装一次，任何项目都能用。
 # 推荐：npm 一键安装
 npm install -g termite-commander
 
-# 或：一键脚本（自动检测 npm，失败则 clone + build）
+# 或：一键脚本（优先 npm，失败则 git checkout + 全局安装）
 curl -fsSL https://raw.githubusercontent.com/billbai-longarena/TermiteCommander/master/install.sh | bash
 ```
 
 验证安装：
 ```bash
 termite-commander --version
+```
+
+升级到最新版本：
+```bash
+npm update -g termite-commander
+```
+
+查看全局包是否过期：
+```bash
+npm outdated -g --depth=0
 ```
 
 > **关于白蚁协议**：不需要手动安装。Commander 首次运行 `--run` 时自动检测，如果目标项目没有白蚁协议，Commander 会自动从 GitHub 克隆并安装。

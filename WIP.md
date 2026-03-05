@@ -1,7 +1,7 @@
 # WIP — Termite Commander 开发交接
 
 **Last updated**: 2026-03-05
-**Session**: Commander v2 全面重构 + TUI + README
+**Session**: 配置优先级修复 + 混合 CLI 工人适配 + 发布收口
 
 ---
 
@@ -52,14 +52,40 @@
 - Protocol README: 同样结构，Shepherd Effect 数据，Commander 推荐 (`ebec9f2`)
 - 安装指南: Step 0 详细说明 Commander 放哪里，不放项目里 (`96930c4`)
 
+### 6. README 中英文分离 (已完成)
+- Commander: 混合 README.md 拆分为纯英文 README.md + 纯中文 README.zh-CN.md (`6c61fed`)
+- Protocol: 同样拆分 (`1b564f4`)
+- 两个版本章节结构一致，顶部互有语言切换链接
+- 英文版无中文内容（导航链接除外），中文版无英文段落（技术术语/代码块除外）
+- 已推送到两个仓库
+
+### 7. 2026-03-05 收口变更 (已完成)
+- 模型解析改为 **配置优先**：`opencode.json > env > default`，并在 `plan/status` 清晰输出来源与细节 (`25ec66a`)
+- 修复关键稳定性问题：OpenAI provider 路由、分解失败 fallback、信号 parentId 映射 (`25ec66a`)
+- 支持混合工人运行时：`opencode` / `claude` / `codex`，统一 `WorkerSpec`，兼容旧 `TERMITE_WORKERS` 写法 (`02ce74b`)
+- 文档同步：`README.md`、`README.zh-CN.md`、`CLAUDE.md` 已覆盖新配置和混合 CLI (`518c724`, `02ce74b`)
+- npm 发布：`termite-commander@0.1.1` 已发布；`commander/package.json` 当前本地版本为 `0.1.2`（待下一次发布）
+
 ---
 
 ## 当前状态
 
-- **50 tests passing**, 7 test suites
-- **Build clean** (tsc, no errors)
-- **All pushed** to both repos (Commander master, Protocol main)
+- **61 tests passing**, 9 test suites（`cd commander && npm test`）
+- **Build clean**（`cd commander && npm run build`）
+- 最新已推送提交：`02ce74b`（mixed opencode/claude/codex worker runtimes）
 - Commander CLI: install / plan / status / stop / workers / resume / watch / TUI
+- 文档已覆盖：配置优先级、模型来源反馈、混合 CLI 工人编排
+
+---
+
+## 备忘
+
+### npm 发布
+- `.env` 中存放了 npm publish token
+- 发布流程：`cd commander && npm run build && npm test && npm publish`
+- token 用于 `npm publish` 认证，确保 `.env` 不被提交（已在 `.gitignore`）
+- 当前线上版本：`0.1.1`；本地 `package.json`：`0.1.2`（如需发布需补一次 publish）
+- 长期建议：CI 改为 npm trusted publishing（OIDC），本地 token 仅作为应急方案；如果用 token，使用 granular token
 
 ---
 
@@ -74,6 +100,10 @@
 - `listSignals()` 的 SQLite 查询可能需要适配不同版本的 termite.db schema
 - git commit feed 在大仓库可能慢（当前 `git log -5`，应该没问题）
 - TUI 在非 TTY 环境报错（已有 guard，但 sage 测试时遇到过）
+
+### 代码结构待清理
+- `src/colony/opencode-launcher.ts` 现已承载多运行时启动逻辑，文件名与职责不一致
+- 可考虑重命名为 `worker-launcher.ts` 并保留兼容导出
 
 ### 信号分解质量
 - decomposer prompt 经过设计但未经大量实测
