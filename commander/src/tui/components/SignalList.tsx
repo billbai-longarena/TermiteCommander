@@ -6,6 +6,7 @@ import type { SignalDetail } from "../../colony/signal-bridge.js";
 interface SignalListProps {
   signals: SignalDetail[];
   maxItems?: number;
+  termWidth?: number;
 }
 
 function statusIcon(status: string): { char: string; color: string } {
@@ -17,7 +18,11 @@ function statusIcon(status: string): { char: string; color: string } {
   }
 }
 
-export function SignalList({ signals, maxItems = 15 }: SignalListProps) {
+export function SignalList({ signals, maxItems = 15, termWidth = 80 }: SignalListProps) {
+  // Dynamic title width: total - padding(2) - id(8) - type(10) - status(12) - claimedBy(~12)
+  const fixedCols = 2 + 8 + 10 + 12 + 12;
+  const titleMaxLen = Math.max(15, termWidth - fixedCols - 2); // -2 for padEnd gap
+  const titleColW = titleMaxLen + 2;
   const display = signals.slice(0, maxItems);
   return (
     <Box flexDirection="column">
@@ -28,7 +33,7 @@ export function SignalList({ signals, maxItems = 15 }: SignalListProps) {
             <Text>{"  "}</Text>
             <Text>{s.id.padEnd(8)}</Text>
             <Text dimColor>{s.type.padEnd(10)}</Text>
-            <Text>{truncate(s.title, 30).padEnd(32)}</Text>
+            <Text>{truncate(s.title, titleMaxLen).padEnd(titleColW)}</Text>
             <Text color={icon.color}>{`${icon.char} ${s.status}`.padEnd(12)}</Text>
             <Text dimColor>{s.claimedBy}</Text>
           </Box>

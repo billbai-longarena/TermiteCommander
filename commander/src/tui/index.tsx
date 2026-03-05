@@ -11,7 +11,16 @@ export async function startTUI(colonyRoot: string): Promise<void> {
     process.exit(1);
   }
 
+  // Enter alternate screen buffer (like vim/htop)
+  process.stdout.write("\x1B[?1049h");
+  process.stdout.write("\x1B[H"); // Move cursor to top-left
+
   const { waitUntilExit } = render(<App colonyRoot={colonyRoot} />);
 
-  await waitUntilExit();
+  try {
+    await waitUntilExit();
+  } finally {
+    // Exit alternate screen buffer
+    process.stdout.write("\x1B[?1049l");
+  }
 }

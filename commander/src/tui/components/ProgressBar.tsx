@@ -7,10 +7,13 @@ interface ProgressBarProps {
   done: number;
   total: number;
   width?: number;
+  termWidth?: number;
 }
 
-export function ProgressBar({ label, done, total, width = 24 }: ProgressBarProps) {
-  const bar = formatProgressBar(done, total, width);
+export function ProgressBar({ label, done, total, width, termWidth = 80 }: ProgressBarProps) {
+  // Dynamic bar width: subtract padding(2) + label(12) + space + stats(~18)
+  const barWidth = width ?? Math.max(10, Math.min(termWidth - 30, 40));
+  const bar = formatProgressBar(done, total, barWidth);
   const pct = formatPercent(done, total);
 
   return (

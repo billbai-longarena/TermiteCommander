@@ -1,11 +1,13 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Box, Text, useStdout } from "ink";
 import { useColonyState } from "./hooks/useColonyState.js";
 import { useGitCommits } from "./hooks/useGitCommits.js";
+import { useLogTail } from "./hooks/useLogTail.js";
 import { ProgressBar } from "./components/ProgressBar.js";
 import { SignalList } from "./components/SignalList.js";
 import { CommitFeed } from "./components/CommitFeed.js";
 import { WorkerTable } from "./components/WorkerTable.js";
+import { ActivityLog } from "./components/ActivityLog.js";
 import { formatDuration, formatTimeAgo } from "./utils/formatters.js";
 
 interface MonitorAppProps {
@@ -13,8 +15,11 @@ interface MonitorAppProps {
 }
 
 export function MonitorApp({ colonyRoot }: MonitorAppProps) {
+  const { stdout } = useStdout();
+  const termWidth = stdout?.columns ?? 80;
   const colony = useColonyState(colonyRoot);
   const commits = useGitCommits(colonyRoot);
+  const logLines = useLogTail(colonyRoot);
 
   const { status, signals, lockData, statusData, isRunning } = colony;
 
@@ -104,6 +109,7 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
           label="Progress"
           done={status.done}
           total={status.total}
+          termWidth={termWidth}
         />
         <Box>
           <Text>{"  "}</Text>
@@ -128,7 +134,7 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
         <Box flexDirection="column" marginTop={1}>
           <Text bold>{" Signals"}</Text>
           {signals.length > 0 ? (
-            <SignalList signals={signals} />
+            <SignalList signals={signals} termWidth={termWidth} />
           ) : (
             <Text dimColor>
               {"  "}
@@ -141,16 +147,22 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
       {/* Recent commits */}
       <Box flexDirection="column" marginTop={1}>
         <Text bold>{" Recent Commits"}</Text>
-        <CommitFeed commits={commits} />
+        <CommitFeed commits={commits} termWidth={termWidth} />
       </Box>
 
       {/* Workers — only show if there are any */}
       {workers.length > 0 && (
         <Box flexDirection="column" marginTop={1}>
           <Text bold>{" Workers"}</Text>
-          <WorkerTable workers={workers} />
+          <WorkerTable workers={workers} termWidth={termWidth} />
         </Box>
       )}
+
+      {/* Activity Log */}
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold>{" Activity Log"}</Text>
+        <ActivityLog lines={logLines} />
+      </Box>
 
       {/* Footer */}
       <Box marginTop={1}>
