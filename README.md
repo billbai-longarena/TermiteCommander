@@ -217,21 +217,21 @@ Each signal follows **weak-model execution standards**:
 
 ### Step 0: Install Commander (one-time, global)
 
-Commander 是全局 CLI 工具，安装一次，任何项目都能用。**不要**放在你的业务项目里。
-
-Commander is a global CLI tool. Install once, use in any project. Do **NOT** put it inside your business project.
+Commander 是全局 CLI 工具，安装一次，任何项目都能用。
+Commander is a global CLI tool. Install once, use in any project.
 
 ```bash
-# 选一个固定位置（推荐 ~/tools/ 或 ~/dev/）
-# Pick a permanent location (e.g. ~/tools/ or ~/dev/)
-git clone https://github.com/billbai-longarena/TermiteCommander.git ~/tools/TermiteCommander
+# 推荐：npm 一键安装
+npm install -g termite-commander
 
-# 构建并全局安装
-cd ~/tools/TermiteCommander/commander
-npm install && npm run build && npm link
+# 或：一键脚本（自动检测 npm，失败则 clone + build）
+curl -fsSL https://raw.githubusercontent.com/billbai-longarena/TermiteCommander/master/install.sh | bash
 ```
 
-`npm link` 创建全局符号链接，之后 `termite-commander` 命令在任何目录可用。TermiteCommander 仓库需要保留在原位。
+验证安装：
+```bash
+termite-commander --version
+```
 
 > **关于 Termite Protocol**：不需要手动安装。Commander 首次运行 `--run` 时自动检测，如果目标项目没有白蚁协议，Commander 会自动从 GitHub 克隆并安装。
 
