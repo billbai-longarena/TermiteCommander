@@ -261,11 +261,13 @@ termite-commander install --colony .
 ```
 设计质量直接决定蚁群产出质量。花时间在这步。
 
-**第 4 步** — 配置工人模型（可选，有默认值）：
+**第 4 步** — 配置工人运行时 + 模型（可选，有默认值）：
 ```bash
-# 默认: 3 个 Haiku 工人, Sonnet 做信号分解
-# 推荐: 1 强 + N 弱 (牧羊效应)
-export TERMITE_WORKERS=sonnet:1,haiku:2
+# 默认: opencode + 3 个 Haiku 工人，Sonnet 做信号分解
+export TERMITE_WORKER_CLI=opencode
+
+# 推荐混合舰队（支持 opencode / claude / codex）
+export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
 ```
 
 **第 5 步** — 启动蚁群：
@@ -294,19 +296,34 @@ cd ~/your-project && termite-commander
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
 | `COMMANDER_MODEL` | 强模型（信号分解） | `claude-sonnet-4-5` |
+| `TERMITE_WORKER_CLI` | 默认工人运行时（`opencode` / `claude` / `codex`） | `opencode` |
 | `TERMITE_MODEL` | 默认弱模型（工人） | `claude-haiku-3-5` |
-| `TERMITE_WORKERS` | 舰队配置 | `3`（3 个默认模型） |
+| `TERMITE_WORKERS` | 舰队配置（`count`、`model:count`、`cli@model:count`） | `3`（3 个默认模型） |
 
 ```bash
 # 统一舰队
 export TERMITE_WORKERS=3
 
-# 混合舰队（推荐，利用牧羊效应）
+# 旧语法（仅默认运行时）
 export TERMITE_WORKERS=sonnet:1,haiku:2,gemini-flash:1
 
+# 混合 CLI 舰队
+export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
+
 # 通过 opencode.json 配置
-# { "model": "anthropic/claude-sonnet-4-5", "small_model": "anthropic/claude-haiku-3-5",
-#   "commander": { "workers": [{"model":"...","count":1}, ...] } }
+# {
+#   "model": "anthropic/claude-sonnet-4-5",
+#   "small_model_cli": "opencode",
+#   "small_model": "anthropic/claude-haiku-3-5",
+#   "commander": {
+#     "default_worker_cli": "opencode",
+#     "workers": [
+#       {"cli":"opencode","model":"haiku","count":2},
+#       {"cli":"claude","model":"sonnet","count":1},
+#       {"cli":"codex","model":"gpt-5-codex","count":1}
+#     ]
+#   }
+# }
 ```
 
 **推荐配置**：1 个强模型工人 (Sonnet) + N 个弱模型工人 (Haiku)。强模型工人的信息素沉积成为模板，通过牧羊效应放大弱模型工人的产出质量。
@@ -368,7 +385,7 @@ commander/src/
     hooks/                     # useColonyState, useGitCommits, useLogTail
 ```
 
-50 个测试，7 个测试套件。`npm run build && npm test`。
+61 个测试，9 个测试套件。`npm run build && npm test`。
 
 ---
 

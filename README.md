@@ -261,11 +261,13 @@ After installation, Claude Code recognizes `/commander` and natural language tri
 ```
 Design quality directly determines colony output quality. Invest time here.
 
-**Step 4** — Configure worker models (optional, has defaults):
+**Step 4** — Configure worker runtime + models (optional, has defaults):
 ```bash
-# Default: 3 Haiku workers, Sonnet for signal decomposition
-# Recommended: 1 strong + N weak (Shepherd Effect)
-export TERMITE_WORKERS=sonnet:1,haiku:2
+# Default: opencode + 3 Haiku workers, Sonnet for signal decomposition
+export TERMITE_WORKER_CLI=opencode
+
+# Recommended mixed fleet (supports opencode / claude / codex):
+export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
 ```
 
 **Step 5** — Launch the colony:
@@ -294,19 +296,34 @@ cd ~/your-project && termite-commander
 | Variable          | Purpose                             | Default             |
 | ----------------- | ----------------------------------- | ------------------- |
 | `COMMANDER_MODEL` | Strong model (signal decomposition) | `claude-sonnet-4-5` |
+| `TERMITE_WORKER_CLI` | Default worker runtime (`opencode` / `claude` / `codex`) | `opencode` |
 | `TERMITE_MODEL`   | Default weak model (workers)        | `claude-haiku-3-5`  |
-| `TERMITE_WORKERS` | Fleet spec                          | `3` (3x default)    |
+| `TERMITE_WORKERS` | Fleet spec (`count`, `model:count`, `cli@model:count`) | `3` (3x default)    |
 
 ```bash
 # Uniform fleet
 export TERMITE_WORKERS=3
 
-# Mixed fleet (recommended for Shepherd Effect)
+# Legacy syntax (default runtime only)
 export TERMITE_WORKERS=sonnet:1,haiku:2,gemini-flash:1
 
+# Mixed CLI fleet
+export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
+
 # Via opencode.json
-# { "model": "anthropic/claude-sonnet-4-5", "small_model": "anthropic/claude-haiku-3-5",
-#   "commander": { "workers": [{"model":"...","count":1}, ...] } }
+# {
+#   "model": "anthropic/claude-sonnet-4-5",
+#   "small_model_cli": "opencode",
+#   "small_model": "anthropic/claude-haiku-3-5",
+#   "commander": {
+#     "default_worker_cli": "opencode",
+#     "workers": [
+#       {"cli":"opencode","model":"haiku","count":2},
+#       {"cli":"claude","model":"sonnet","count":1},
+#       {"cli":"codex","model":"gpt-5-codex","count":1}
+#     ]
+#   }
+# }
 ```
 
 **Recommended configuration**: 1 strong model worker (Sonnet) + N weak model workers (Haiku). The strong worker's pheromone deposits become templates that amplify weak worker quality via the Shepherd Effect.
@@ -368,7 +385,7 @@ commander/src/
     hooks/                     # useColonyState, useGitCommits, useLogTail
 ```
 
-50 tests across 7 suites. `npm run build && npm test`.
+61 tests across 9 suites. `npm run build && npm test`.
 
 ---
 

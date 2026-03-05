@@ -18,10 +18,12 @@ vi.mock("../../config/model-resolver.js", () => ({
   resolveModels: () => ({
     commanderModel: "claude-sonnet-4-5",
     commanderProvider: "anthropic",
-    workers: [{ model: undefined, count: 1 }],
+    workers: [{ cli: "opencode", model: undefined, count: 1 }],
+    defaultWorkerCli: "opencode",
     defaultWorkerModel: "claude-haiku-3-5",
     resolution: {
       commanderModel: { source: "default", detail: "claude-sonnet-4-5" },
+      defaultWorkerCli: { source: "default", detail: "opencode" },
       defaultWorkerModel: { source: "default", detail: "claude-haiku-3-5" },
       workers: { source: "default", detail: "1 x claude-haiku-3-5" },
     },

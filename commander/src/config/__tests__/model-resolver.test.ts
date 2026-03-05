@@ -17,20 +17,20 @@ import {
 
 describe("parseWorkerSpec", () => {
   it("parses a count-only spec", () => {
-    expect(parseWorkerSpec("3")).toEqual([{ model: undefined, count: 3 }]);
+    expect(parseWorkerSpec("3")).toEqual([{ cli: "opencode", model: undefined, count: 3 }]);
   });
 
   it("parses a mixed model spec", () => {
     const result = parseWorkerSpec("sonnet:1,haiku:2,gemini-flash:1");
     expect(result).toEqual([
-      { model: "sonnet", count: 1 },
-      { model: "haiku", count: 2 },
-      { model: "gemini-flash", count: 1 },
+      { cli: "opencode", model: "sonnet", count: 1 },
+      { cli: "opencode", model: "haiku", count: 2 },
+      { cli: "opencode", model: "gemini-flash", count: 1 },
     ]);
   });
 
   it("parses a single model spec", () => {
-    expect(parseWorkerSpec("haiku:2")).toEqual([{ model: "haiku", count: 2 }]);
+    expect(parseWorkerSpec("haiku:2")).toEqual([{ cli: "opencode", model: "haiku", count: 2 }]);
   });
 
   it("handles empty string", () => {
@@ -40,9 +40,28 @@ describe("parseWorkerSpec", () => {
   it("handles whitespace around entries", () => {
     const result = parseWorkerSpec(" sonnet : 1 , haiku : 2 ");
     expect(result).toEqual([
-      { model: "sonnet", count: 1 },
-      { model: "haiku", count: 2 },
+      { cli: "opencode", model: "sonnet", count: 1 },
+      { cli: "opencode", model: "haiku", count: 2 },
     ]);
+  });
+
+  it("parses explicit runtime syntax", () => {
+    const result = parseWorkerSpec("codex@gpt-5-codex:1,claude@sonnet:2,opencode@haiku");
+    expect(result).toEqual([
+      { cli: "codex", model: "gpt-5-codex", count: 1 },
+      { cli: "claude", model: "sonnet", count: 2 },
+      { cli: "opencode", model: "haiku", count: 1 },
+    ]);
+  });
+
+  it("uses provided default runtime for legacy syntax", () => {
+    const result = parseWorkerSpec("haiku:2", "codex");
+    expect(result).toEqual([{ cli: "codex", model: "haiku", count: 2 }]);
+  });
+
+  it("parses runtime with count and default model", () => {
+    const result = parseWorkerSpec("codex:3");
+    expect(result).toEqual([{ cli: "codex", model: undefined, count: 3 }]);
   });
 });
 
@@ -190,7 +209,7 @@ describe("resolveModels", () => {
 
   // Save and restore env vars
   const savedEnv: Record<string, string | undefined> = {};
-  const envKeys = ["COMMANDER_MODEL", "TERMITE_MODEL", "TERMITE_WORKERS"];
+  const envKeys = ["COMMANDER_MODEL", "TERMITE_MODEL", "TERMITE_WORKERS", "TERMITE_WORKER_CLI"];
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "model-resolver-test-"));
@@ -215,9 +234,11 @@ describe("resolveModels", () => {
     const result = resolveModels(tempDir);
     expect(result.commanderModel).toBe("claude-sonnet-4-5");
     expect(result.commanderProvider).toBe("anthropic");
+    expect(result.defaultWorkerCli).toBe("opencode");
     expect(result.defaultWorkerModel).toBe("claude-haiku-3-5");
-    expect(result.workers).toEqual([{ model: undefined, count: 3 }]);
+    expect(result.workers).toEqual([{ cli: "opencode", model: undefined, count: 3 }]);
     expect(result.resolution.commanderModel.source).toBe("default");
+    expect(result.resolution.defaultWorkerCli.source).toBe("default");
     expect(result.resolution.defaultWorkerModel.source).toBe("default");
     expect(result.resolution.workers.source).toBe("default");
   });
@@ -225,17 +246,20 @@ describe("resolveModels", () => {
   it("uses env vars when set", () => {
     process.env.COMMANDER_MODEL = "openai/gpt-4";
     process.env.TERMITE_MODEL = "anthropic/claude-haiku-3-5";
+    process.env.TERMITE_WORKER_CLI = "codex";
     process.env.TERMITE_WORKERS = "haiku:2,sonnet:1";
 
     const result = resolveModels(tempDir);
     expect(result.commanderModel).toBe("gpt-4");
     expect(result.commanderProvider).toBe("openai");
+    expect(result.defaultWorkerCli).toBe("codex");
     expect(result.defaultWorkerModel).toBe("claude-haiku-3-5");
     expect(result.workers).toEqual([
-      { model: "haiku", count: 2 },
-      { model: "sonnet", count: 1 },
+      { cli: "codex", model: "haiku", count: 2 },
+      { cli: "codex", model: "sonnet", count: 1 },
     ]);
     expect(result.resolution.commanderModel.source).toBe("env");
+    expect(result.resolution.defaultWorkerCli.source).toBe("env");
     expect(result.resolution.defaultWorkerModel.source).toBe("env");
     expect(result.resolution.workers.source).toBe("env");
   });
@@ -245,6 +269,7 @@ describe("resolveModels", () => {
       join(tempDir, "opencode.json"),
       JSON.stringify({
         model: "anthropic/claude-sonnet-4-5",
+        small_model_cli: "claude",
         small_model: "anthropic/claude-haiku-3-5",
         commander: {
           workers: [{ model: "haiku", count: 4 }],
@@ -255,25 +280,29 @@ describe("resolveModels", () => {
     const result = resolveModels(tempDir);
     expect(result.commanderModel).toBe("claude-sonnet-4-5");
     expect(result.commanderProvider).toBe("anthropic");
+    expect(result.defaultWorkerCli).toBe("claude");
     expect(result.defaultWorkerModel).toBe("claude-haiku-3-5");
-    expect(result.workers).toEqual([{ model: "haiku", count: 4 }]);
+    expect(result.workers).toEqual([{ cli: "claude", model: "haiku", count: 4 }]);
     expect(result.resolution.commanderModel.source).toBe("config");
+    expect(result.resolution.defaultWorkerCli.source).toBe("config");
     expect(result.resolution.defaultWorkerModel.source).toBe("config");
     expect(result.resolution.workers.source).toBe("config");
   });
 
   it("opencode.json takes priority over env vars", () => {
     process.env.COMMANDER_MODEL = "azure/gpt-5";
+    process.env.TERMITE_WORKER_CLI = "opencode";
     process.env.TERMITE_MODEL = "openai/gpt-4o-mini";
-    process.env.TERMITE_WORKERS = "haiku:5";
+    process.env.TERMITE_WORKERS = "codex@gpt-5-codex:5";
 
     writeFileSync(
       join(tempDir, "opencode.json"),
       JSON.stringify({
         model: "anthropic/claude-sonnet-4-5",
+        small_model_cli: "claude",
         small_model: "anthropic/claude-haiku-3-5",
         commander: {
-          workers: [{ model: "haiku", count: 2 }],
+          workers: [{ cli: "codex", model: "gpt-5-codex", count: 2 }],
         },
       }),
     );
@@ -281,17 +310,31 @@ describe("resolveModels", () => {
     const result = resolveModels(tempDir);
     expect(result.commanderModel).toBe("claude-sonnet-4-5");
     expect(result.commanderProvider).toBe("anthropic");
+    expect(result.defaultWorkerCli).toBe("claude");
     expect(result.defaultWorkerModel).toBe("claude-haiku-3-5");
-    expect(result.workers).toEqual([{ model: "haiku", count: 2 }]);
+    expect(result.workers).toEqual([{ cli: "codex", model: "gpt-5-codex", count: 2 }]);
     expect(result.resolution.commanderModel.source).toBe("config");
+    expect(result.resolution.defaultWorkerCli.source).toBe("config");
     expect(result.resolution.defaultWorkerModel.source).toBe("config");
     expect(result.resolution.workers.source).toBe("config");
   });
 
   it("uses count-only TERMITE_WORKERS", () => {
+    process.env.TERMITE_WORKER_CLI = "claude";
     process.env.TERMITE_WORKERS = "5";
 
     const result = resolveModels(tempDir);
-    expect(result.workers).toEqual([{ model: undefined, count: 5 }]);
+    expect(result.workers).toEqual([{ cli: "claude", model: undefined, count: 5 }]);
+  });
+
+  it("supports mixed runtime workers from TERMITE_WORKERS", () => {
+    process.env.TERMITE_WORKERS = "codex@gpt-5-codex:1,claude@sonnet:1,opencode@haiku:2";
+
+    const result = resolveModels(tempDir);
+    expect(result.workers).toEqual([
+      { cli: "codex", model: "gpt-5-codex", count: 1 },
+      { cli: "claude", model: "sonnet", count: 1 },
+      { cli: "opencode", model: "haiku", count: 2 },
+    ]);
   });
 });

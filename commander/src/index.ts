@@ -28,11 +28,13 @@ program
   .option("-c, --colony <path>", "Project root directory", process.cwd())
   .action(async (opts: { colony: string }) => {
     const { OpenCodeLauncher } = await import("./colony/opencode-launcher.js");
+    const resolved = resolveModels(opts.colony);
     const launcher = new OpenCodeLauncher({
       colonyRoot: opts.colony,
       skillSourceDir: resolve(import.meta.dirname ?? ".", "../skills/termite"),
-      workerSpecs: [],
-      defaultWorkerModel: "",
+      workerSpecs: resolved.workers,
+      defaultWorkerCli: resolved.defaultWorkerCli,
+      defaultWorkerModel: resolved.defaultWorkerModel,
     });
 
     try {
@@ -42,11 +44,21 @@ program
       process.exit(1);
     }
 
-    // Check OpenCode availability
-    const hasOpenCode = await launcher.checkOpenCode();
-    if (!hasOpenCode) {
-      console.warn("\nWarning: 'opencode' CLI not found in PATH.");
-      console.warn("Workers need OpenCode to run. Install: https://github.com/nicepkg/opencode");
+    // Check worker runtime CLIs for current config
+    const runtimeCheck = await launcher.checkRequiredRuntimes();
+    if (runtimeCheck.missing.length > 0) {
+      console.warn(`\nWarning: missing worker CLIs: ${runtimeCheck.missing.join(", ")}`);
+      for (const runtime of runtimeCheck.missing) {
+        if (runtime === "opencode") {
+          console.warn("  - opencode: https://github.com/nicepkg/opencode");
+        } else if (runtime === "claude") {
+          console.warn("  - claude: install Claude Code CLI");
+        } else if (runtime === "codex") {
+          console.warn("  - codex: install Codex CLI");
+        }
+      }
+    } else {
+      console.log(`\nWorker CLIs ready: ${runtimeCheck.available.join(", ")}`);
     }
 
     console.log("\nCommander skills installed. Available commands:");
@@ -103,7 +115,7 @@ program
     const status = await bridge.status();
     const models = resolveModels(opts.colony);
     const workersLabel = models.workers
-      .map((w) => `${w.model ?? models.defaultWorkerModel} ×${w.count}`)
+      .map((w) => `${w.cli}@${w.model ?? models.defaultWorkerModel} ×${w.count}`)
       .join(" | ");
 
     // Also read commander.lock and .commander-status.json if available
@@ -134,17 +146,24 @@ program
       );
       console.log(
         `Model Sources: commander=${models.resolution.commanderModel.source} (${models.resolution.commanderModel.detail})` +
+        ` defaultWorkerCli=${models.resolution.defaultWorkerCli.source} (${models.resolution.defaultWorkerCli.detail})` +
         ` defaultWorker=${models.resolution.defaultWorkerModel.source} (${models.resolution.defaultWorkerModel.detail})` +
         ` workers=${models.resolution.workers.source} (${models.resolution.workers.detail})`,
       );
       if (statusFileData) {
         console.log(`Workers: active=${statusFileData.heartbeat?.activeWorkers ?? 0} running=${statusFileData.heartbeat?.runningWorkers ?? 0}`);
         if (statusFileData.models) {
-          console.log(`Models: commander=${statusFileData.models.commander} workers=${statusFileData.models.workers}`);
+          console.log(
+            `Models: commander=${statusFileData.models.commander}` +
+            ` defaultWorkerCli=${statusFileData.models.defaultWorkerCli ?? "-"}` +
+            ` defaultWorkerModel=${statusFileData.models.defaultWorkerModel ?? "-"}` +
+            ` workers=${statusFileData.models.workers}`,
+          );
           const resolution = statusFileData.models.resolution;
           if (resolution) {
             console.log(
               `  Sources: commander=${resolution.commanderModel?.source ?? "unknown"} (${resolution.commanderModel?.detail ?? "-"})` +
+              ` defaultWorkerCli=${resolution.defaultWorkerCli?.source ?? "unknown"} (${resolution.defaultWorkerCli?.detail ?? "-"})` +
               ` defaultWorker=${resolution.defaultWorkerModel?.source ?? "unknown"} (${resolution.defaultWorkerModel?.detail ?? "-"})` +
               ` workers=${resolution.workers?.source ?? "unknown"} (${resolution.workers?.detail ?? "-"})`,
             );
@@ -279,12 +298,14 @@ program
     }
 
     console.log(`Workers (${workers.length}):`);
-    console.log("  ID                              STATUS    SESSION             STARTED");
-    console.log("  " + "-".repeat(80));
+    console.log("  ID                              CLI      MODEL                     STATUS    SESSION             STARTED");
+    console.log("  " + "-".repeat(120));
     for (const w of workers) {
       const sid = w.sessionId ? w.sessionId.slice(0, 16) + "..." : "-";
       const started = w.startedAt ? new Date(w.startedAt).toLocaleTimeString() : "-";
-      console.log(`  ${w.id.padEnd(34)}${w.status.padEnd(10)}${sid.padEnd(20)}${started}`);
+      const cli = (w.cli ?? "-").toString();
+      const model = (w.model ?? "-").toString();
+      console.log(`  ${w.id.padEnd(34)}${cli.padEnd(9)}${model.padEnd(26)}${w.status.padEnd(10)}${sid.padEnd(20)}${started}`);
     }
   });
 

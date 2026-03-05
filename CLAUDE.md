@@ -30,7 +30,7 @@ TermiteCommander (指挥官)
 │   Protocol 的 commit 通过 gitlink 记录在 Commander 仓库中
 │
 └── 适配 OpenCode (工人运行时)
-    Commander 通过 `opencode run --model <model>` 启动工人
+    Commander 支持 `opencode` / `claude` / `codex` CLI 启动工人（可混合调度）
     opencode/ 源码仅作本地参考，不提交到 Commander 仓库
 ```
 
@@ -94,17 +94,18 @@ Priority: opencode.json > environment variables > defaults
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | COMMANDER_MODEL | Strong model for signal decomposition | claude-sonnet-4-5 |
+| TERMITE_WORKER_CLI | Default worker runtime (opencode/claude/codex) | opencode |
 | TERMITE_MODEL | Default weak model for workers | claude-haiku-3-5 |
-| TERMITE_WORKERS | Worker fleet spec ("3" or "sonnet:1,haiku:2") | 3 × default |
+| TERMITE_WORKERS | Worker fleet spec ("3", "model:count", "cli@model:count") | 3 × default |
 
-Falls back to opencode.json: `model`, `small_model`, `commander.workers`.
+Falls back to opencode.json: `model`, `small_model_cli`, `small_model`, `commander.default_worker_cli`, `commander.workers`.
 
 ## Build & Test
 
 ```bash
 cd commander
 npm run build          # tsc
-npm test               # 57 tests, 9 suites
+npm test               # 61 tests, 9 suites
 ```
 
 ## Conventions
@@ -114,7 +115,7 @@ npm test               # 57 tests, 9 suites
 - Pipeline: 2 phases (classify + decompose), auto-installs protocol + genesis
 - Model config: opencode.json > env vars > defaults, mixed-model worker fleets
 - Model status feedback: `plan` and `status` print effective model selection and source (config/env/default)
-- Workers: `opencode run --model <provider/model>` per worker
-- Pre-flight checks: OpenCode availability, protocol presence
+- Workers: supports `opencode`, `claude`, and `codex` runtimes with mixed fleet scheduling
+- Pre-flight checks: runtime CLI availability + protocol presence
 - LLM provider: Anthropic (default), OpenAI, or Azure OpenAI via Vercel AI SDK
 - Signals use SQLite (via colony's termite-db.sh)

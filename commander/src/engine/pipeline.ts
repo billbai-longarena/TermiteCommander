@@ -35,10 +35,8 @@ export class Pipeline {
     this.launcher = new OpenCodeLauncher({
       colonyRoot: config.colonyRoot,
       skillSourceDir: config.skillSourceDir,
-      workerSpecs: this.models.workers.map((w) => ({
-        model: w.model ?? this.models.defaultWorkerModel,
-        count: w.count,
-      })),
+      workerSpecs: this.models.workers,
+      defaultWorkerCli: this.models.defaultWorkerCli,
       defaultWorkerModel: this.models.defaultWorkerModel,
     });
   }
@@ -57,6 +55,8 @@ export class Pipeline {
     const statusPath = join(this.config.colonyRoot, ".commander-status.json");
     const workers = this.launcher.getWorkers().map((w) => ({
       id: w.id,
+      cli: w.cli,
+      model: w.model,
       status: w.status,
       sessionId: w.sessionId,
       startedAt: w.startedAt.toISOString(),
@@ -73,8 +73,10 @@ export class Pipeline {
       },
       models: {
         commander: this.models.commanderModel,
+        defaultWorkerCli: this.models.defaultWorkerCli,
+        defaultWorkerModel: this.models.defaultWorkerModel,
         workers: this.models.workers.map(w =>
-          `${w.model ?? this.models.defaultWorkerModel} ×${w.count}`
+          `${w.cli}@${w.model ?? this.models.defaultWorkerModel} ×${w.count}`
         ).join(" | "),
         workerSpecs: this.models.workers,
         resolution: this.models.resolution,
@@ -90,11 +92,14 @@ export class Pipeline {
 
   private logModelResolution(): void {
     const workersLabel = this.models.workers
-      .map((w) => `${w.model ?? this.models.defaultWorkerModel} ×${w.count}`)
+      .map((w) => `${w.cli}@${w.model ?? this.models.defaultWorkerModel} ×${w.count}`)
       .join(" | ");
     console.log("[commander] Model resolution:");
     console.log(
       `  commander=${this.models.commanderModel} provider=${this.models.commanderProvider} source=${this.models.resolution.commanderModel.source} (${this.models.resolution.commanderModel.detail})`,
+    );
+    console.log(
+      `  defaultWorkerCli=${this.models.defaultWorkerCli} source=${this.models.resolution.defaultWorkerCli.source} (${this.models.resolution.defaultWorkerCli.detail})`,
     );
     console.log(
       `  defaultWorker=${this.models.defaultWorkerModel} source=${this.models.resolution.defaultWorkerModel.source} (${this.models.resolution.defaultWorkerModel.detail})`,
@@ -363,14 +368,21 @@ export class Pipeline {
 
   async runWithHeartbeats(plan: Plan): Promise<void> {
     // Pre-flight checks
-    const hasOpenCode = await this.launcher.checkOpenCode();
-    if (!hasOpenCode) {
+    const runtimeCheck = await this.launcher.checkRequiredRuntimes();
+    if (runtimeCheck.missing.length > 0) {
+      const installHints: Record<string, string> = {
+        opencode: "opencode (https://github.com/nicepkg/opencode)",
+        claude: "Claude Code CLI (command: claude)",
+        codex: "Codex CLI (command: codex)",
+      };
+      const details = runtimeCheck.missing
+        .map((runtime) => `  - ${runtime}: ${installHints[runtime] ?? "install corresponding CLI"}`)
+        .join("\n");
       console.error(
-        "[commander] OpenCode CLI not found.\n" +
-          "Install it: npm install -g opencode\n" +
-          "Or see: https://github.com/nicepkg/opencode",
+        `[commander] Missing required worker CLIs:\n${details}\n` +
+          `Configured workers: ${this.models.workers.map((w) => `${w.cli}@${w.model ?? this.models.defaultWorkerModel} ×${w.count}`).join(" | ")}`,
       );
-      throw new Error("OpenCode CLI not installed");
+      throw new Error(`Missing worker CLIs: ${runtimeCheck.missing.join(", ")}`);
     }
 
     // Ensure protocol + genesis before starting
@@ -407,9 +419,15 @@ export class Pipeline {
       },
     });
 
+    const workerCliSet = new Set(this.models.workers.map((w) => w.cli));
+    const colonyPlatform: Platform =
+      workerCliSet.size === 1 && workerCliSet.has("opencode")
+        ? "opencode"
+        : "unknown";
+
     const colonyLoop = new ColonyLoop({
       colonyRoot: this.config.colonyRoot,
-      platform: "opencode",
+      platform: colonyPlatform,
       baseIntervalMs: 15_000,
       maxIntervalMs: 60_000,
       stallThreshold: 20,
