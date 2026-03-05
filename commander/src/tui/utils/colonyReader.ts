@@ -9,7 +9,7 @@ export interface LockData {
 
 export interface WorkerData {
   id: string;
-  status: "running" | "idle" | "stopped" | "errored";
+  status: "running" | "idle" | "stopped" | "errored" | "dead";
   sessionId: string | null;
   startedAt: string;
 }

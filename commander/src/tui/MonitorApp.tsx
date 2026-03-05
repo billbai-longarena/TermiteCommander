@@ -19,8 +19,23 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
   const { status, signals, lockData, statusData, isRunning } = colony;
 
   const colonyName = colonyRoot.split("/").pop() ?? colonyRoot;
-  const stateLabel = isRunning ? "RUNNING" : lockData ? "STALE LOCK" : "IDLE";
-  const stateColor = isRunning ? "green" : lockData ? "red" : "gray";
+
+  // State label with stale detection
+  let stateLabel: string;
+  let stateColor: string;
+  if (isRunning) {
+    stateLabel = "RUNNING";
+    stateColor = "green";
+  } else if (lockData) {
+    stateLabel = "STALE (Commander exited, run 'termite-commander stop' to clean up)";
+    stateColor = "red";
+  } else if (status.total > 0) {
+    stateLabel = "IDLE (colony has signals)";
+    stateColor = "yellow";
+  } else {
+    stateLabel = "IDLE";
+    stateColor = "gray";
+  }
 
   // Duration since commander started
   let durationStr = "";
@@ -29,21 +44,17 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
     durationStr = formatDuration(elapsed);
   }
 
-  // Workers from status file
-  const workers = statusData?.workers ?? [];
+  // Workers from status file — mark as dead if Commander is not running
+  const rawWorkers = statusData?.workers ?? [];
+  const workers = rawWorkers.map((w) => ({
+    ...w,
+    status: isRunning ? w.status : ("dead" as const),
+  }));
 
-  // Model info from status file
-  const commanderModel = statusData?.taskType ?? "unknown";
-
-  // Build worker fleet composition string
-  const modelCounts: Record<string, number> = {};
-  for (const w of workers) {
-    const m = (w as any).model ?? "unknown";
-    modelCounts[m] = (modelCounts[m] ?? 0) + 1;
-  }
-  const fleetStr = Object.entries(modelCounts)
-    .map(([m, n]) => `${n}x ${m}`)
-    .join(", ") || "no workers";
+  // Model info from status file (models section added in v2)
+  const modelsInfo = (statusData as any)?.models;
+  const commanderModel = modelsInfo?.commander ?? "";
+  const workersFleetStr = modelsInfo?.workers ?? "";
 
   return (
     <Box flexDirection="column">
@@ -58,7 +69,9 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
           <Text color={stateColor} bold>
             {stateLabel}
           </Text>
-          {durationStr && <Text dimColor>{`  (${durationStr})`}</Text>}
+          {durationStr && isRunning && (
+            <Text dimColor>{`  (${durationStr})`}</Text>
+          )}
         </Box>
 
         {/* Objective */}
@@ -69,18 +82,29 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
           </Box>
         )}
 
-        {/* Model info */}
-        <Box>
-          <Text dimColor>{"  Commander: "}</Text>
-          <Text dimColor>{commanderModel}</Text>
-          <Text dimColor>{"  | Fleet: "}</Text>
-          <Text dimColor>{fleetStr}</Text>
-        </Box>
+        {/* Model info — only show if we have it */}
+        {commanderModel && (
+          <Box>
+            <Text dimColor>{"  Model: "}</Text>
+            <Text>{commanderModel}</Text>
+            <Text dimColor>{" (commander)"}</Text>
+          </Box>
+        )}
+        {workersFleetStr && (
+          <Box>
+            <Text dimColor>{"  Workers: "}</Text>
+            <Text>{workersFleetStr}</Text>
+          </Box>
+        )}
       </Box>
 
       {/* Progress */}
       <Box flexDirection="column" marginTop={1}>
-        <ProgressBar label="Signals" done={status.done} total={status.total} />
+        <ProgressBar
+          label="Progress"
+          done={status.done}
+          total={status.total}
+        />
         <Box>
           <Text>{"  "}</Text>
           <Text color="green">{`\u2713 done(${status.done})`}</Text>
@@ -91,16 +115,28 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
         </Box>
         {statusData?.updatedAt && (
           <Box>
-            <Text dimColor>{"  Heartbeat: "}{formatTimeAgo(statusData.updatedAt)}</Text>
+            <Text dimColor>
+              {"  Last heartbeat: "}
+              {formatTimeAgo(statusData.updatedAt)}
+            </Text>
           </Box>
         )}
       </Box>
 
       {/* Signal list */}
-      <Box flexDirection="column" marginTop={1}>
-        <Text bold>{" Signals"}</Text>
-        <SignalList signals={signals} />
-      </Box>
+      {(signals.length > 0 || status.total > 0) && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold>{" Signals"}</Text>
+          {signals.length > 0 ? (
+            <SignalList signals={signals} />
+          ) : (
+            <Text dimColor>
+              {"  "}
+              {status.total} signals in DB (detail query unavailable)
+            </Text>
+          )}
+        </Box>
+      )}
 
       {/* Recent commits */}
       <Box flexDirection="column" marginTop={1}>
@@ -108,11 +144,13 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
         <CommitFeed commits={commits} />
       </Box>
 
-      {/* Workers */}
-      <Box flexDirection="column" marginTop={1}>
-        <Text bold>{" Workers"}</Text>
-        <WorkerTable workers={workers} />
-      </Box>
+      {/* Workers — only show if there are any */}
+      {workers.length > 0 && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold>{" Workers"}</Text>
+          <WorkerTable workers={workers} />
+        </Box>
+      )}
 
       {/* Footer */}
       <Box marginTop={1}>
@@ -120,6 +158,13 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
           {"  Ctrl+C to exit | /commander in Claude Code/OpenCode to control"}
         </Text>
       </Box>
+
+      {/* Error */}
+      {colony.error && (
+        <Box marginTop={1}>
+          <Text color="red">{"  Error: "}{colony.error}</Text>
+        </Box>
+      )}
     </Box>
   );
 }

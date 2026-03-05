@@ -7,16 +7,18 @@ interface WorkerTableProps {
   workers: WorkerData[];
 }
 
-function statusDisplay(status: string): { color: string } {
+function statusDisplay(status: string): { color: string; icon: string } {
   switch (status) {
     case "running":
-      return { color: "green" };
+      return { color: "green", icon: "\u25CF" };
     case "idle":
-      return { color: "yellow" };
+      return { color: "yellow", icon: "\u25CB" };
     case "errored":
-      return { color: "red" };
+      return { color: "red", icon: "\u2717" };
+    case "dead":
+      return { color: "gray", icon: "\u2620" };
     default:
-      return { color: "gray" };
+      return { color: "gray", icon: "?" };
   }
 }
 
@@ -48,7 +50,7 @@ export function WorkerTable({ workers }: WorkerTableProps) {
             <Text>{"  "}</Text>
             <Text>{truncate(w.id, 12).padEnd(14)}</Text>
             <Text color={st.color}>
-              {`\u25CF ${w.status}`.padEnd(12)}
+              {`${st.icon} ${w.status}`.padEnd(12)}
             </Text>
             <Text dimColor>{truncate(model, 16).padEnd(18)}</Text>
             <Text dimColor>{sessionStr.padEnd(22)}</Text>

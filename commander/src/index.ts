@@ -187,11 +187,21 @@ program
       }
     }
 
-    // Clean up lock file
+    // Clean up lock file and stale status
     try {
       unlinkSync(lockPath);
       console.log("commander.lock removed.");
     } catch {}
+
+    const statusFilePath = join(opts.colony, ".commander-status.json");
+    try {
+      if (existsSync(statusFilePath)) {
+        unlinkSync(statusFilePath);
+        console.log(".commander-status.json removed.");
+      }
+    } catch {}
+
+    console.log("Colony cleaned up. Ready for next run.");
   });
 
 program
