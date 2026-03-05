@@ -12,10 +12,14 @@ function detectPlatform(): "opencode" | "claude-code" | "unknown" {
   return "unknown";
 }
 
+const pkg = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf-8")
+);
+
 program
   .name("termite-commander")
   .description("Termite Commander — autonomous orchestration engine")
-  .version("0.1.0");
+  .version(pkg.version);
 
 program
   .command("install")
