@@ -13,21 +13,40 @@ Autonomous orchestration engine for the Termite Protocol. Decomposes objectives 
 
 ## Repository Structure
 
-This workspace contains two independent Git repos that work together:
+This workspace contains three repos with different roles:
 
-| Directory | Repo | Branch | Description |
-|-----------|------|--------|-------------|
-| `.` (root) | `git@github.com:billbai-longarena/TermiteCommander.git` | `master` | Commander engine, CLI, plugins, skills |
-| `TermiteProtocol/` | `git@github.com:billbai-longarena/Termite-Protocol.git` | `main` | Protocol spec, field scripts, templates, audit packages |
+| Directory | Repo | Branch | Role | Relationship |
+|-----------|------|--------|------|-------------|
+| `.` (root) | `git@github.com:billbai-longarena/TermiteCommander.git` | `master` | Commander engine, CLI, plugins, skills | 主项目 |
+| `TermiteProtocol/` | `git@github.com:billbai-longarena/Termite-Protocol.git` | `main` | Protocol spec, field scripts, templates, audit packages | 嵌套 git repo (subproject)，Commander 通过 gitlink 跟踪其 commit |
+| `opencode/` | `https://github.com/anomalyco/opencode.git` | `dev` | AI coding agent (类似 Claude Code) | 参考源码，Commander 需要适配其 API。已在 .gitignore 排除 |
 
-**Push separately:**
+**项目关系：**
+
+```
+TermiteCommander (指挥官)
+├── 依赖 TermiteProtocol (协议规范)
+│   Commander 按照 Protocol 定义的信号格式、field scripts、蚁群规则来分解任务和调度工人
+│   Protocol 的 commit 通过 gitlink 记录在 Commander 仓库中
+│
+└── 适配 OpenCode (工人运行时)
+    Commander 通过 `opencode run --model <model>` 启动工人
+    opencode/ 源码仅作本地参考，不提交到 Commander 仓库
+```
+
+**Push 规则：**
 
 ```bash
-# Commander (root)
+# Commander (root) — 推到 master
 git push origin master
 
-# Termite Protocol (nested repo)
+# Termite Protocol (nested repo) — 推到 main
 cd TermiteProtocol && git push origin main
+
+# 如果 TermiteProtocol 有新 commit，回到 root 更新 gitlink：
+cd .. && git add TermiteProtocol && git commit -m "chore: update TermiteProtocol ref"
+
+# opencode/ 不推送，仅本地参考（.gitignore 已排除）
 ```
 
 ## Key Paths
