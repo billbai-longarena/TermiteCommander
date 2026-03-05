@@ -217,6 +217,9 @@ describe("resolveModels", () => {
     expect(result.commanderProvider).toBe("anthropic");
     expect(result.defaultWorkerModel).toBe("claude-haiku-3-5");
     expect(result.workers).toEqual([{ model: undefined, count: 3 }]);
+    expect(result.resolution.commanderModel.source).toBe("default");
+    expect(result.resolution.defaultWorkerModel.source).toBe("default");
+    expect(result.resolution.workers.source).toBe("default");
   });
 
   it("uses env vars when set", () => {
@@ -232,9 +235,12 @@ describe("resolveModels", () => {
       { model: "haiku", count: 2 },
       { model: "sonnet", count: 1 },
     ]);
+    expect(result.resolution.commanderModel.source).toBe("env");
+    expect(result.resolution.defaultWorkerModel.source).toBe("env");
+    expect(result.resolution.workers.source).toBe("env");
   });
 
-  it("falls back to opencode.json when env vars not set", () => {
+  it("falls back to opencode.json when env vars are not set", () => {
     writeFileSync(
       join(tempDir, "opencode.json"),
       JSON.stringify({
@@ -251,19 +257,35 @@ describe("resolveModels", () => {
     expect(result.commanderProvider).toBe("anthropic");
     expect(result.defaultWorkerModel).toBe("claude-haiku-3-5");
     expect(result.workers).toEqual([{ model: "haiku", count: 4 }]);
+    expect(result.resolution.commanderModel.source).toBe("config");
+    expect(result.resolution.defaultWorkerModel.source).toBe("config");
+    expect(result.resolution.workers.source).toBe("config");
   });
 
-  it("env vars take priority over opencode.json", () => {
+  it("opencode.json takes priority over env vars", () => {
     process.env.COMMANDER_MODEL = "azure/gpt-5";
+    process.env.TERMITE_MODEL = "openai/gpt-4o-mini";
+    process.env.TERMITE_WORKERS = "haiku:5";
 
     writeFileSync(
       join(tempDir, "opencode.json"),
-      JSON.stringify({ model: "claude-sonnet-4-5" }),
+      JSON.stringify({
+        model: "anthropic/claude-sonnet-4-5",
+        small_model: "anthropic/claude-haiku-3-5",
+        commander: {
+          workers: [{ model: "haiku", count: 2 }],
+        },
+      }),
     );
 
     const result = resolveModels(tempDir);
-    expect(result.commanderModel).toBe("gpt-5");
-    expect(result.commanderProvider).toBe("azure-openai");
+    expect(result.commanderModel).toBe("claude-sonnet-4-5");
+    expect(result.commanderProvider).toBe("anthropic");
+    expect(result.defaultWorkerModel).toBe("claude-haiku-3-5");
+    expect(result.workers).toEqual([{ model: "haiku", count: 2 }]);
+    expect(result.resolution.commanderModel.source).toBe("config");
+    expect(result.resolution.defaultWorkerModel.source).toBe("config");
+    expect(result.resolution.workers.source).toBe("config");
   });
 
   it("uses count-only TERMITE_WORKERS", () => {

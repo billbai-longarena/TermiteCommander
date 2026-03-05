@@ -289,12 +289,12 @@ cd ~/your-project && termite-commander
 
 ## Model Configuration
 
-**Priority**: environment variables > `opencode.json` > defaults
+**Priority**: `opencode.json` > environment variables > defaults
 
 | Variable          | Purpose                             | Default             |
 | ----------------- | ----------------------------------- | ------------------- |
 | `COMMANDER_MODEL` | Strong model (signal decomposition) | `claude-sonnet-4-5` |
-| `TERMITE_MODEL`   | Default weak model (workers)        | `claude-haiku-4-5`  |
+| `TERMITE_MODEL`   | Default weak model (workers)        | `claude-haiku-3-5`  |
 | `TERMITE_WORKERS` | Fleet spec                          | `3` (3x default)    |
 
 ```bash

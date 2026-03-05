@@ -15,17 +15,36 @@ export interface WorkerSpec {
   count: number;
 }
 
+export type ResolutionSource = "config" | "env" | "default";
+
+export interface ResolutionField {
+  source: ResolutionSource;
+  detail: string;
+}
+
+export interface ModelResolutionStatus {
+  commanderModel: ResolutionField;
+  defaultWorkerModel: ResolutionField;
+  workers: ResolutionField;
+}
+
 export interface ResolvedModels {
   commanderModel: string;
   commanderProvider: "anthropic" | "openai" | "azure-openai";
   workers: WorkerSpec[];
   defaultWorkerModel: string;
+  resolution: ModelResolutionStatus;
 }
 
 export interface OpenCodeConfig {
   model?: string;
   small_model?: string;
   commander?: { workers?: Array<{ model: string; count: number }> };
+}
+
+interface OpenCodeConfigLookup {
+  config: OpenCodeConfig | null;
+  path: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +199,7 @@ function stripJsoncComments(text: string): string {
  *
  * Returns null if none found or if parsing fails.
  */
-export function readOpenCodeConfig(colonyRoot: string): OpenCodeConfig | null {
+export function readOpenCodeConfigWithPath(colonyRoot: string): OpenCodeConfigLookup {
   const candidates = [
     join(colonyRoot, "opencode.json"),
     join(colonyRoot, ".opencode", "opencode.json"),
@@ -192,7 +211,10 @@ export function readOpenCodeConfig(colonyRoot: string): OpenCodeConfig | null {
       try {
         const raw = readFileSync(candidate, "utf-8");
         const stripped = stripJsoncComments(raw);
-        return JSON.parse(stripped) as OpenCodeConfig;
+        return {
+          config: JSON.parse(stripped) as OpenCodeConfig,
+          path: candidate,
+        };
       } catch {
         // Malformed JSON -- try next candidate
         continue;
@@ -200,7 +222,11 @@ export function readOpenCodeConfig(colonyRoot: string): OpenCodeConfig | null {
     }
   }
 
-  return null;
+  return { config: null, path: null };
+}
+
+export function readOpenCodeConfig(colonyRoot: string): OpenCodeConfig | null {
+  return readOpenCodeConfigWithPath(colonyRoot).config;
 }
 
 // ---------------------------------------------------------------------------
@@ -215,44 +241,93 @@ const DEFAULT_WORKER_COUNT = 3;
  * Resolve model configuration from env vars, opencode.json, and defaults.
  *
  * Priority (highest wins):
- *   Commander model:       COMMANDER_MODEL env > opencode.json "model" > "claude-sonnet-4-5"
- *   Default worker model:  TERMITE_MODEL env > opencode.json "small_model" > "claude-haiku-3-5"
- *   Workers:               TERMITE_WORKERS env > opencode.json "commander.workers" > 3x default
+ *   Commander model:       opencode.json "model" > COMMANDER_MODEL env > "claude-sonnet-4-5"
+ *   Default worker model:  opencode.json "small_model" > TERMITE_MODEL env > "claude-haiku-3-5"
+ *   Workers:               opencode.json "commander.workers" > TERMITE_WORKERS env > 3x default
  *   Commander provider:    extracted from resolved commander model string
  */
 export function resolveModels(colonyRoot: string): ResolvedModels {
-  const config = readOpenCodeConfig(colonyRoot);
+  const configLookup = readOpenCodeConfigWithPath(colonyRoot);
+  const config = configLookup.config;
+  const configPath = configLookup.path;
 
   // Commander model
-  const commanderModelRaw =
-    process.env.COMMANDER_MODEL ??
-    config?.model ??
-    DEFAULT_COMMANDER_MODEL;
+  let commanderModelRaw: string;
+  let commanderModelResolution: ResolutionField;
+  if (config?.model) {
+    commanderModelRaw = config.model;
+    commanderModelResolution = {
+      source: "config",
+      detail: configPath ?? "opencode.json",
+    };
+  } else if (process.env.COMMANDER_MODEL) {
+    commanderModelRaw = process.env.COMMANDER_MODEL;
+    commanderModelResolution = {
+      source: "env",
+      detail: "COMMANDER_MODEL",
+    };
+  } else {
+    commanderModelRaw = DEFAULT_COMMANDER_MODEL;
+    commanderModelResolution = {
+      source: "default",
+      detail: DEFAULT_COMMANDER_MODEL,
+    };
+  }
 
   const commanderModel = extractModelName(commanderModelRaw);
   const commanderProvider = extractProvider(commanderModelRaw);
 
   // Default worker model
-  const defaultWorkerModelRaw =
-    process.env.TERMITE_MODEL ??
-    config?.small_model ??
-    DEFAULT_WORKER_MODEL;
+  let defaultWorkerModelRaw: string;
+  let defaultWorkerResolution: ResolutionField;
+  if (config?.small_model) {
+    defaultWorkerModelRaw = config.small_model;
+    defaultWorkerResolution = {
+      source: "config",
+      detail: configPath ?? "opencode.json",
+    };
+  } else if (process.env.TERMITE_MODEL) {
+    defaultWorkerModelRaw = process.env.TERMITE_MODEL;
+    defaultWorkerResolution = {
+      source: "env",
+      detail: "TERMITE_MODEL",
+    };
+  } else {
+    defaultWorkerModelRaw = DEFAULT_WORKER_MODEL;
+    defaultWorkerResolution = {
+      source: "default",
+      detail: DEFAULT_WORKER_MODEL,
+    };
+  }
 
   const defaultWorkerModel = extractModelName(defaultWorkerModelRaw);
 
   // Workers
   let workers: WorkerSpec[];
+  let workersResolution: ResolutionField;
 
   const workersEnv = process.env.TERMITE_WORKERS;
-  if (workersEnv) {
-    workers = parseWorkerSpec(workersEnv);
-  } else if (config?.commander?.workers && config.commander.workers.length > 0) {
+  if (config?.commander?.workers && config.commander.workers.length > 0) {
     workers = config.commander.workers.map((w) => ({
       model: w.model,
       count: w.count,
     }));
+    workersResolution = {
+      source: "config",
+      detail: configPath ?? "opencode.json",
+    };
+  } else if (workersEnv) {
+    workers = parseWorkerSpec(workersEnv);
+    workersResolution = {
+      source: "env",
+      detail: "TERMITE_WORKERS",
+    };
   } else {
     workers = [{ model: undefined, count: DEFAULT_WORKER_COUNT }];
+    workersResolution = {
+      source: "default",
+      detail: `${DEFAULT_WORKER_COUNT} x ${DEFAULT_WORKER_MODEL}`,
+    };
   }
 
   return {
@@ -260,5 +335,10 @@ export function resolveModels(colonyRoot: string): ResolvedModels {
     commanderProvider,
     workers,
     defaultWorkerModel,
+    resolution: {
+      commanderModel: commanderModelResolution,
+      defaultWorkerModel: defaultWorkerResolution,
+      workers: workersResolution,
+    },
   };
 }

@@ -24,6 +24,19 @@ function getAzureOpenAI() {
   });
 }
 
+function getOpenAI() {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY not set");
+  }
+
+  const baseURL = process.env.OPENAI_BASE_URL;
+  return createOpenAI({
+    apiKey,
+    baseURL,
+  });
+}
+
 function getAnthropic() {
   // Support Anthropic Foundry (Azure-hosted) or standard Anthropic API
   const foundryKey = process.env.ANTHROPIC_FOUNDRY_API_KEY;
@@ -61,6 +74,15 @@ export async function callLLM(prompt: string, config?: LLMConfig): Promise<strin
         maxTokens: 4096,
       });
       return result.text;
+    } else if (provider === "openai") {
+      const openai = getOpenAI();
+      const isCodex = model.includes("codex");
+      const result = await generateText({
+        model: isCodex ? openai.responses(model) : openai(model),
+        prompt,
+        maxTokens: 4096,
+      });
+      return result.text;
     } else {
       const anthropic = getAnthropic();
       const result = await generateText({
@@ -81,6 +103,9 @@ function detectDefaultProvider(): LLMConfig["provider"] {
   // can have API compatibility issues with chat completions
   if (process.env.ANTHROPIC_FOUNDRY_API_KEY || process.env.ANTHROPIC_API_KEY) {
     return "anthropic";
+  }
+  if (process.env.OPENAI_API_KEY) {
+    return "openai";
   }
   return "azure-openai";
 }

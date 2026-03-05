@@ -5,6 +5,7 @@ import { Pipeline, type PipelineConfig } from "./engine/pipeline.js";
 import { SignalBridge } from "./colony/signal-bridge.js";
 import { resolve, join } from "node:path";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { resolveModels } from "./config/model-resolver.js";
 
 function detectPlatform(): "opencode" | "claude-code" | "unknown" {
   if (process.env.CLAUDE_PROJECT_DIR) return "claude-code";
@@ -86,7 +87,7 @@ program
       await pipeline.runWithHeartbeats(plan);
     } else if (opts.dispatch) {
       await pipeline.dispatch(plan);
-      console.log("\nSignals dispatched. Run 'commander watch' to monitor.");
+      console.log("\nSignals dispatched. Run 'termite-commander watch' to monitor.");
     } else {
       console.log("\nPlan generated. Use --dispatch to send signals, or --run to start execution.");
     }
@@ -100,6 +101,10 @@ program
   .action(async (opts: { colony: string; json: boolean }) => {
     const bridge = new SignalBridge(opts.colony);
     const status = await bridge.status();
+    const models = resolveModels(opts.colony);
+    const workersLabel = models.workers
+      .map((w) => `${w.model ?? models.defaultWorkerModel} ×${w.count}`)
+      .join(" | ");
 
     // Also read commander.lock and .commander-status.json if available
     const lockPath = join(opts.colony, "commander.lock");
@@ -115,7 +120,7 @@ program
     }
 
     if (opts.json) {
-      console.log(JSON.stringify({ colony: status, commander: lockData, status: statusFileData }, null, 2));
+      console.log(JSON.stringify({ colony: status, commander: lockData, status: statusFileData, models }, null, 2));
     } else {
       const running = lockData ? `YES (PID ${lockData.pid})` : "NO";
       console.log(`Commander: ${running}`);
@@ -124,8 +129,27 @@ program
         console.log(`  Started:   ${lockData.startedAt}`);
       }
       console.log(`Signals: total=${status.total} open=${status.open} claimed=${status.claimed} done=${status.done}`);
+      console.log(
+        `Resolved Models: commander=${models.commanderModel} provider=${models.commanderProvider} workers=${workersLabel}`,
+      );
+      console.log(
+        `Model Sources: commander=${models.resolution.commanderModel.source} (${models.resolution.commanderModel.detail})` +
+        ` defaultWorker=${models.resolution.defaultWorkerModel.source} (${models.resolution.defaultWorkerModel.detail})` +
+        ` workers=${models.resolution.workers.source} (${models.resolution.workers.detail})`,
+      );
       if (statusFileData) {
         console.log(`Workers: active=${statusFileData.heartbeat?.activeWorkers ?? 0} running=${statusFileData.heartbeat?.runningWorkers ?? 0}`);
+        if (statusFileData.models) {
+          console.log(`Models: commander=${statusFileData.models.commander} workers=${statusFileData.models.workers}`);
+          const resolution = statusFileData.models.resolution;
+          if (resolution) {
+            console.log(
+              `  Sources: commander=${resolution.commanderModel?.source ?? "unknown"} (${resolution.commanderModel?.detail ?? "-"})` +
+              ` defaultWorker=${resolution.defaultWorkerModel?.source ?? "unknown"} (${resolution.defaultWorkerModel?.detail ?? "-"})` +
+              ` workers=${resolution.workers?.source ?? "unknown"} (${resolution.workers?.detail ?? "-"})`,
+            );
+          }
+        }
         console.log(`Updated: ${statusFileData.updatedAt}`);
       }
     }
@@ -149,7 +173,7 @@ program
     console.log(readFileSync(haltPath, "utf-8"));
     console.log("\nRemoving HALT.md and restarting...");
     unlinkSync(haltPath);
-    console.log("Colony resumed. Run 'commander plan --run' with new objectives.");
+    console.log("Colony resumed. Run 'termite-commander plan --run' with new objectives.");
   });
 
 program

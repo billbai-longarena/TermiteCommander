@@ -289,12 +289,12 @@ cd ~/your-project && termite-commander
 
 ## 模型配置
 
-**优先级**：环境变量 > `opencode.json` > 默认值
+**优先级**：`opencode.json` > 环境变量 > 默认值
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
 | `COMMANDER_MODEL` | 强模型（信号分解） | `claude-sonnet-4-5` |
-| `TERMITE_MODEL` | 默认弱模型（工人） | `claude-haiku-4-5` |
+| `TERMITE_MODEL` | 默认弱模型（工人） | `claude-haiku-3-5` |
 | `TERMITE_WORKERS` | 舰队配置 | `3`（3 个默认模型） |
 
 ```bash

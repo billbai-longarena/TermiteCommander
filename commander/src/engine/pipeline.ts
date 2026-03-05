@@ -29,6 +29,7 @@ export class Pipeline {
     this.config = config;
     this.bridge = new SignalBridge(config.colonyRoot);
     this.models = resolveModels(config.colonyRoot);
+    this.logModelResolution();
     // Override llmConfig with resolved models
     this.config.llmConfig = configFromResolved(this.models);
     this.launcher = new OpenCodeLauncher({
@@ -76,6 +77,7 @@ export class Pipeline {
           `${w.model ?? this.models.defaultWorkerModel} ×${w.count}`
         ).join(" | "),
         workerSpecs: this.models.workers,
+        resolution: this.models.resolution,
       },
       workers,
       heartbeat: {
@@ -84,6 +86,22 @@ export class Pipeline {
       },
     };
     writeFileSync(statusPath, JSON.stringify(data, null, 2), "utf-8");
+  }
+
+  private logModelResolution(): void {
+    const workersLabel = this.models.workers
+      .map((w) => `${w.model ?? this.models.defaultWorkerModel} ×${w.count}`)
+      .join(" | ");
+    console.log("[commander] Model resolution:");
+    console.log(
+      `  commander=${this.models.commanderModel} provider=${this.models.commanderProvider} source=${this.models.resolution.commanderModel.source} (${this.models.resolution.commanderModel.detail})`,
+    );
+    console.log(
+      `  defaultWorker=${this.models.defaultWorkerModel} source=${this.models.resolution.defaultWorkerModel.source} (${this.models.resolution.defaultWorkerModel.detail})`,
+    );
+    console.log(
+      `  workers=${workersLabel} source=${this.models.resolution.workers.source} (${this.models.resolution.workers.detail})`,
+    );
   }
 
   private cleanupLockFile(): void {
@@ -95,6 +113,20 @@ export class Pipeline {
     } catch {
       // Best-effort cleanup
     }
+  }
+
+  private fallbackSignal(objective: string): DecomposedSignal {
+    return {
+      type: "HOLE",
+      title: `Implement objective: ${objective.slice(0, 120)}`,
+      weight: 80,
+      source: "directive",
+      parentId: null,
+      childHint: null,
+      module: "",
+      nextHint: `Translate the objective into concrete code changes and tests. Objective: ${objective}`,
+      acceptanceCriteria: "Code changes are implemented and tests pass.",
+    };
   }
 
   async plan(
@@ -123,13 +155,24 @@ export class Pipeline {
       taskType,
       designContext,
     );
-    const signalsJson = await callLLM(decompositionPrompt, this.config.llmConfig);
+    let signalsJson = "[]";
+    try {
+      signalsJson = await callLLM(decompositionPrompt, this.config.llmConfig);
+    } catch (err: any) {
+      console.error(`[commander] Decomposition failed, using fallback signal: ${err?.message ?? "unknown error"}`);
+      signalsJson = JSON.stringify([this.fallbackSignal(objective)]);
+    }
 
     let signals: DecomposedSignal[] = [];
     try {
-      signals = JSON.parse(signalsJson);
+      const parsed = JSON.parse(signalsJson);
+      if (!Array.isArray(parsed)) {
+        throw new Error("LLM did not return a JSON array");
+      }
+      signals = parsed;
     } catch {
-      console.error("[commander] Failed to parse signals JSON, using empty list");
+      console.error("[commander] Failed to parse signals JSON, using fallback signal");
+      signals = [this.fallbackSignal(objective)];
     }
 
     const { valid, errors } = SignalDecomposer.validateTree(signals);
@@ -137,7 +180,20 @@ export class Pipeline {
       console.warn("[commander] Signal validation warnings:", errors);
     }
 
+    const originalIds = signals.map((_, i) => `S-${String(i + 1).padStart(3, "0")}`);
+    const originalIdBySignal = new Map<DecomposedSignal, string>();
+    signals.forEach((signal, i) => originalIdBySignal.set(signal, originalIds[i]));
+
     signals = SignalDecomposer.topologicalSort(signals);
+
+    const remappedIds = signals.map((_, i) => `S-${String(i + 1).padStart(3, "0")}`);
+    const newIdByOriginalId = new Map<string, string>();
+    signals.forEach((signal, i) => {
+      const originalId = originalIdBySignal.get(signal);
+      if (originalId) {
+        newIdByOriginalId.set(originalId, remappedIds[i]);
+      }
+    });
 
     const plan: Plan = {
       objective,
@@ -148,11 +204,11 @@ export class Pipeline {
       architecture: null,
       synthesis: null,
       signals: signals.map((s, i) => ({
-        id: `S-${String(i + 1).padStart(3, "0")}`,
+        id: remappedIds[i],
         type: s.type,
         title: s.title,
         weight: s.weight,
-        parentId: s.parentId,
+        parentId: s.parentId ? (newIdByOriginalId.get(s.parentId) ?? null) : null,
         status: "open",
       })),
       qualityCriteria: "",
@@ -167,16 +223,49 @@ export class Pipeline {
     await PlanWriter.writeToDisk(plan, this.config.colonyRoot);
 
     console.log(`[commander] Creating ${plan.signals.length} directive signals...`);
-    for (const signal of plan.signals) {
-      await this.bridge.createSignal({
-        type: signal.type,
-        title: signal.title,
-        weight: signal.weight,
-        source: "directive",
-        parentId: signal.parentId ?? undefined,
-        module: "",
-        nextHint: "",
-      });
+    const pending = [...plan.signals];
+    const dbIdByPlanId = new Map<string, string>();
+
+    while (pending.length > 0) {
+      let progressed = false;
+
+      for (let i = 0; i < pending.length; i++) {
+        const signal = pending[i];
+        const parentDbId = signal.parentId ? dbIdByPlanId.get(signal.parentId) : undefined;
+
+        if (signal.parentId && !parentDbId) {
+          continue;
+        }
+
+        const result = await this.bridge.createSignal({
+          type: signal.type,
+          title: signal.title,
+          weight: signal.weight,
+          source: "directive",
+          parentId: parentDbId,
+          module: "",
+          nextHint: "",
+        });
+
+        if (result.exitCode !== 0) {
+          throw new Error(`Failed to create signal ${signal.id}: ${result.stderr || "unknown error"}`);
+        }
+
+        const createdId = result.stdout.split(/\s+/).filter(Boolean).pop();
+        if (!createdId) {
+          throw new Error(`Signal ${signal.id} created but no DB ID was returned`);
+        }
+
+        dbIdByPlanId.set(signal.id, createdId);
+        pending.splice(i, 1);
+        i--;
+        progressed = true;
+      }
+
+      if (!progressed) {
+        const unresolved = pending.map((s) => `${s.id}(parent=${s.parentId ?? "null"})`).join(", ");
+        throw new Error(`Unable to resolve signal dependency chain: ${unresolved}`);
+      }
     }
     console.log("[commander] Signals dispatched to colony.");
   }
