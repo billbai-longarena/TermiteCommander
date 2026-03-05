@@ -35,6 +35,9 @@ DIRECTIVE.md
 # Logs
 *.log
 
+# OpenCode local config
+opencode/
+
 # Environment
 .env
 .env.*
