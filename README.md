@@ -27,13 +27,13 @@ You're paying strong-model prices for work that Haiku could do — **if the task
 
 ### Existing multi-agent approaches miss the real issue
 
-| Framework | How agents coordinate | Why it doesn't solve the cost problem |
-|-----------|----------------------|---------------------------------------|
-| **CrewAI / AutoGen** | Agents discuss via chat | All agents need strong models to hold conversation context. Weak models hallucinate in multi-turn discussions. No persistent memory — every session restarts from zero. |
-| **LangGraph** | Static workflow graphs | Predetermined flow, no dynamic task claiming. Can't adapt to parallel workers finishing at different times. |
-| **OpenAI Swarm** | Agent-to-agent handoff | Sequential handoff, not parallel execution. One agent active at a time. |
-| **Devin / Codex CLI** | Single agent, long session | No parallelism, no weak-model delegation. One model does everything. |
-| **MetaGPT** | Role-play simulation | PM, architect, engineer all need strong models. Conversation overhead scales with agent count. |
+| Framework             | How agents coordinate      | Why it doesn't solve the cost problem                                                                                                                                   |
+| --------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **CrewAI / AutoGen**  | Agents discuss via chat    | All agents need strong models to hold conversation context. Weak models hallucinate in multi-turn discussions. No persistent memory — every session restarts from zero. |
+| **LangGraph**         | Static workflow graphs     | Predetermined flow, no dynamic task claiming. Can't adapt to parallel workers finishing at different times.                                                             |
+| **OpenAI Swarm**      | Agent-to-agent handoff     | Sequential handoff, not parallel execution. One agent active at a time.                                                                                                 |
+| **Devin / Codex CLI** | Single agent, long session | No parallelism, no weak-model delegation. One model does everything.                                                                                                    |
+| **MetaGPT**           | Role-play simulation       | PM, architect, engineer all need strong models. Conversation overhead scales with agent count.                                                                          |
 
 **The common failure**: These frameworks coordinate agents through **conversation** or **message passing**. This requires every agent to understand context, maintain coherent dialogue, and reason about other agents' state — exactly the things weak models can't do.
 
@@ -60,11 +60,11 @@ Why this matters: **Weak models don't need to be smart. They just need to sense 
 
 Our most significant finding, validated across 4 audit experiments:
 
-| Configuration | Observation Quality | Handoff Quality | Source |
-|--------------|-------------------|-----------------|--------|
-| 2 Haiku independent | **35.7%** | 0% | A-003 ReactiveArmor |
-| 1 Codex + 2 Haiku | **96.4%** | 99% | A-005 touchcli |
-| 5-model swarm (diluted) | **57%** | 100% | A-006 touchcli |
+| Configuration           | Observation Quality | Handoff Quality | Source              |
+| ----------------------- | ------------------- | --------------- | ------------------- |
+| 2 Haiku independent     | **35.7%**           | 0%              | A-003 ReactiveArmor |
+| 1 Codex + 2 Haiku       | **96.4%**           | 99%             | A-005 touchcli      |
+| 5-model swarm (diluted) | **57%**             | 100%            | A-006 touchcli      |
 
 **Mechanism**: When a strong model (Codex/Sonnet) works in the colony first, it leaves high-quality pheromone deposits — observations with complete pattern/context/detail structure. Subsequent weak models **imitate these templates through in-context learning**. The `.birth` file carries an `observation_example` from the strongest prior deposit.
 
@@ -76,12 +76,12 @@ This is not training. It's not fine-tuning. It's **environmental amplification**
 
 Other frameworks burden agents with full context windows of documentation. Termite Protocol compresses the entire coordination state into a `.birth` file — **<800 tokens** — computed dynamically by `field-arrive.sh`:
 
-| Approach | Agent context cost | What agent needs to read |
-|----------|--------------------|--------------------------|
-| Full protocol document (v2) | ~40% of context window | 28K token TERMITE_PROTOCOL.md |
-| Termite .birth (v3+) | **~2%** of context window | 800 token computed snapshot |
-| CrewAI role prompt | ~10-15% | Role description + conversation history |
-| AutoGen system prompt | ~5-10% | System message + growing chat log |
+| Approach                    | Agent context cost        | What agent needs to read                |
+| --------------------------- | ------------------------- | --------------------------------------- |
+| Full protocol document (v2) | ~40% of context window    | 28K token TERMITE_PROTOCOL.md           |
+| Termite .birth (v3+)        | **~2%** of context window | 800 token computed snapshot             |
+| CrewAI role prompt          | ~10-15%                   | Role description + conversation history |
+| AutoGen system prompt       | ~5-10%                    | System message + growing chat log       |
 
 The `.birth` file contains: current colony state, top unclaimed signal, behavioral template (Shepherd Effect exemplar), 4 safety rules, and recovery hints. It's everything an agent needs and nothing more.
 
@@ -104,12 +104,12 @@ Agent arrives → reads .birth → sees unclaimed signal →
 
 We don't have synthetic benchmarks. We have **real multi-model colony audits** with detailed findings:
 
-| Colony | Models | Duration | Commits | Signals | Key Finding |
-|--------|--------|----------|---------|---------|-------------|
-| **ReactiveArmor** (A-003) | Codex + 2 Haiku | — | 121 | 24 | Weak models execute protocol loop but fail judgment (validates F-009c) |
-| **touchcli** (A-005) | Codex + 2 Haiku | 6h | 130 | 6 | **Shepherd Effect**: 96.4% quality via pheromone templates |
-| **touchcli** (A-006) | 5 models | 17h | **562** | 113 | Highest throughput ever; dilution regression at scale |
-| **SalesTouch** (0227) | Production | ongoing | — | — | Stable production reference colony |
+| Colony                    | Models          | Duration | Commits | Signals | Key Finding                                                            |
+| ------------------------- | --------------- | -------- | ------- | ------- | ---------------------------------------------------------------------- |
+| **ReactiveArmor** (A-003) | Codex + 2 Haiku | —        | 121     | 24      | Weak models execute protocol loop but fail judgment (validates F-009c) |
+| **touchcli** (A-005)      | Codex + 2 Haiku | 6h       | 130     | 6       | **Shepherd Effect**: 96.4% quality via pheromone templates             |
+| **touchcli** (A-006)      | 5 models        | 17h      | **562** | 113     | Highest throughput ever; dilution regression at scale                  |
+| **SalesTouch** (0227)     | Production      | ongoing  | —       | —       | Stable production reference colony                                     |
 
 A-005 delivered a complete MVP: PostgreSQL schema (11 tables), REST API (11 endpoints), React/Vite frontend, Docker containerization — all from 1 Codex shepherd + 2 Haiku workers.
 
@@ -143,24 +143,24 @@ Each signal follows **weak-model execution standards**:
 
 ### Ideal Scenarios
 
-| Scenario | Why it works | Example |
-|----------|-------------|---------|
-| **Feature implementation after design** | Design is done, execution is parallelizable | "Build the auth system from PLAN.md" |
-| **Large-scale refactoring** | Many independent file changes | "Migrate all API routes from Express to Fastify" |
-| **Test suite creation** | Each test file is independent | "Add unit tests for all service modules" |
-| **Documentation generation** | Each doc is independent | "Generate API docs for all endpoints" |
-| **Dependency migration** | Repetitive per-file changes | "Upgrade all React class components to hooks" |
-| **Multi-module scaffolding** | Parallel file creation | "Create CRUD endpoints for 8 database models" |
+| Scenario                                | Why it works                                | Example                                          |
+| --------------------------------------- | ------------------------------------------- | ------------------------------------------------ |
+| **Feature implementation after design** | Design is done, execution is parallelizable | "Build the auth system from PLAN.md"             |
+| **Large-scale refactoring**             | Many independent file changes               | "Migrate all API routes from Express to Fastify" |
+| **Test suite creation**                 | Each test file is independent               | "Add unit tests for all service modules"         |
+| **Documentation generation**            | Each doc is independent                     | "Generate API docs for all endpoints"            |
+| **Dependency migration**                | Repetitive per-file changes                 | "Upgrade all React class components to hooks"    |
+| **Multi-module scaffolding**            | Parallel file creation                      | "Create CRUD endpoints for 8 database models"    |
 
 ### Not Ideal Scenarios
 
-| Scenario | Why it doesn't fit | What to use instead |
-|----------|-------------------|---------------------|
-| **Exploratory research** | Needs strong model judgment, not parallel execution | Claude Code directly |
-| **Architecture design** | Needs holistic understanding across the codebase | Claude Code directly |
-| **Debugging cross-cutting issues** | Requires tracing dependencies across files | Claude Code directly |
-| **Single-file deep refactoring** | No parallelism benefit | Claude Code directly |
-| **Ambiguous requirements** | Weak models can't resolve ambiguity | Design first, then Commander |
+| Scenario                           | Why it doesn't fit                                  | What to use instead          |
+| ---------------------------------- | --------------------------------------------------- | ---------------------------- |
+| **Exploratory research**           | Needs strong model judgment, not parallel execution | Claude Code directly         |
+| **Architecture design**            | Needs holistic understanding across the codebase    | Claude Code directly         |
+| **Debugging cross-cutting issues** | Requires tracing dependencies across files          | Claude Code directly         |
+| **Single-file deep refactoring**   | No parallelism benefit                              | Claude Code directly         |
+| **Ambiguous requirements**         | Weak models can't resolve ambiguity                 | Design first, then Commander |
 
 **Rule of thumb**: If you can decompose the work into independent, file-level tasks before starting — Commander will accelerate it. If the work requires discovering what to do as you go — use Claude Code directly.
 
@@ -208,30 +208,82 @@ Each signal follows **weak-model execution standards**:
 
 ## Quick Start
 
-### Install
+### Prerequisites
+
+- **Node.js 22+**
+- **OpenCode** — [github.com/nicepkg/opencode](https://github.com/nicepkg/opencode) (drives worker agents)
+- **Anthropic API Key** — `export ANTHROPIC_API_KEY=sk-...`
+- **Git**
+
+### Step 0: Install Commander (one-time, global)
+
+Commander 是全局 CLI 工具，安装一次，任何项目都能用。**不要**放在你的业务项目里。
+
+Commander is a global CLI tool. Install once, use in any project. Do **NOT** put it inside your business project.
 
 ```bash
-git clone https://github.com/billbai-longarena/TermiteCommander.git
-cd TermiteCommander/commander
+# 选一个固定位置（推荐 ~/tools/ 或 ~/dev/）
+# Pick a permanent location (e.g. ~/tools/ or ~/dev/)
+git clone https://github.com/billbai-longarena/TermiteCommander.git ~/tools/TermiteCommander
+
+# 构建并全局安装
+cd ~/tools/TermiteCommander/commander
 npm install && npm run build && npm link
 ```
 
-Prerequisites: Node.js 22+, OpenCode, Anthropic API key.
-Termite Protocol auto-installed by Commander if not present.
+`npm link` 创建全局符号链接，之后 `termite-commander` 命令在任何目录可用。TermiteCommander 仓库需要保留在原位。
+
+> **关于 Termite Protocol**：不需要手动安装。Commander 首次运行 `--run` 时自动检测，如果目标项目没有白蚁协议，Commander 会自动从 GitHub 克隆并安装。
 
 ### 7-Step Workflow
 
-| Step | What | How |
-|------|------|-----|
-| **1** | Open project in Claude Code | `cd ~/project && claude` |
-| **2** | Install Commander skills (one-time) | `termite-commander install --colony .` |
-| **3** | Design your feature | Chat with Claude Code, output to PLAN.md |
-| **4** | Configure workers (optional) | `export TERMITE_WORKERS=sonnet:1,haiku:2` |
-| **5** | Start colony | `/commander 按照PLAN.md开始施工` |
-| **6** | Watch dashboard | `termite-commander` (another terminal) |
-| **7** | Review results | `/commander status` or read HALT.md |
+**Step 1** — 进入项目，启动 Claude Code（或 OpenCode）：
+```bash
+cd ~/your-project
+claude    # or: opencode
+```
 
-Commander auto-detects protocol, auto-initializes colony, decomposes, dispatches, launches workers, monitors, and halts on completion.
+**Step 2** — 安装 Commander skills 到项目（每个项目一次）：
+```bash
+termite-commander install --colony .
+```
+安装到项目的内容：
+- `.claude/plugins/termite-commander/` — Claude Code 插件（SessionStart hook + /commander skill）
+- `.opencode/skill/commander/` — OpenCode 的 commander skill
+- `.opencode/skill/termite/` — 白蚁协议 skill（工人用来认领信号、沉积信息素）
+
+安装后 Claude Code 识别 `/commander` 和自然语言（"让蚁群干活"、"deploy termites"）。
+
+**Step 3** — 在 Claude Code 中做设计：
+```
+> Help me design an OAuth2 authentication system for this Express app.
+> Write the architecture plan to PLAN.md.
+```
+设计质量直接决定蚁群产出质量。花时间在这步。
+
+**Step 4** — 配置工人模型（可选，有默认值）：
+```bash
+# 默认: 3 个 Haiku 工人, Sonnet 做信号分解
+# 推荐: 1 强 + N 弱 (Shepherd Effect)
+export TERMITE_WORKERS=sonnet:1,haiku:2
+```
+
+**Step 5** — 启动蚁群：
+```
+> /commander 按照PLAN.md开始施工
+```
+Commander 自动完成全链路：检测白蚁协议（没有则从 GitHub 安装）→ 创世 → 信号分解 → 发布 → 启动工人 → 心跳监控。
+
+**Step 6** — 另开终端看 TUI 仪表盘：
+```bash
+cd ~/your-project && termite-commander
+```
+
+**Step 7** — 蚁群完成后自动停止。查看结果：
+```
+> /commander status
+> Read HALT.md and summarize what the colony accomplished
+```
 
 ---
 
@@ -239,11 +291,11 @@ Commander auto-detects protocol, auto-initializes colony, decomposes, dispatches
 
 **Priority**: environment variables > `opencode.json` > defaults
 
-| Variable | Purpose | Default |
-|----------|---------|---------|
+| Variable          | Purpose                             | Default             |
+| ----------------- | ----------------------------------- | ------------------- |
 | `COMMANDER_MODEL` | Strong model (signal decomposition) | `claude-sonnet-4-5` |
-| `TERMITE_MODEL` | Default weak model (workers) | `claude-haiku-3-5` |
-| `TERMITE_WORKERS` | Fleet spec | `3` (3x default) |
+| `TERMITE_MODEL`   | Default weak model (workers)        | `claude-haiku-4-5`  |
+| `TERMITE_WORKERS` | Fleet spec                          | `3` (3x default)    |
 
 ```bash
 # Uniform fleet
@@ -322,15 +374,15 @@ commander/src/
 
 ## Protocol Integration
 
-| What | Provided by | How |
-|------|------------|-----|
-| Signal DB + atomic claiming | Termite Protocol | SQLite + field-claim.sh |
-| Agent initialization | Termite Protocol | field-arrive.sh → .birth (<800 tokens) |
-| Cross-session memory | Termite Protocol | Pheromone deposits + decay |
-| Shepherd Effect templates | Termite Protocol | observation_example in .birth |
-| **Signal decomposition** | **Commander** | Strong model → atomic signals |
-| **Worker fleet orchestration** | **Commander** | Mixed-model launch + heartbeat |
-| **Monitoring** | **Commander** | TUI + status files + activity log |
+| What                           | Provided by      | How                                    |
+| ------------------------------ | ---------------- | -------------------------------------- |
+| Signal DB + atomic claiming    | Termite Protocol | SQLite + field-claim.sh                |
+| Agent initialization           | Termite Protocol | field-arrive.sh → .birth (<800 tokens) |
+| Cross-session memory           | Termite Protocol | Pheromone deposits + decay             |
+| Shepherd Effect templates      | Termite Protocol | observation_example in .birth          |
+| **Signal decomposition**       | **Commander**    | Strong model → atomic signals          |
+| **Worker fleet orchestration** | **Commander**    | Mixed-model launch + heartbeat         |
+| **Monitoring**                 | **Commander**    | TUI + status files + activity log      |
 
 ---
 

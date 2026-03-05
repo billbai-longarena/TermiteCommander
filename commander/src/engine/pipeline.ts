@@ -193,25 +193,51 @@ export class Pipeline {
     }
 
     console.log("[commander] Termite Protocol not found. Installing...");
-    // Look for install.sh relative to commander package
-    const installScript = join(
+
+    // Strategy 1: Look for install.sh relative to commander package
+    //   skillSourceDir = commander/skills/termite → ../../../TermiteProtocol/install.sh
+    const localInstall = join(
       this.config.skillSourceDir,
       "../../../TermiteProtocol/install.sh",
     );
-    if (!existsSync(installScript)) {
-      console.error(
-        "[commander] Cannot find TermiteProtocol/install.sh. " +
-          "Please install the Termite Protocol manually:\n" +
-          "  bash /path/to/TermiteProtocol/install.sh " +
-          this.config.colonyRoot,
-      );
-      throw new Error("Termite Protocol not installed");
-    }
 
     const { execFileSync } = await import("node:child_process");
-    execFileSync("bash", [installScript, this.config.colonyRoot], {
-      stdio: "inherit",
-    });
+
+    if (existsSync(localInstall)) {
+      console.log("[commander] Using local TermiteProtocol/install.sh");
+      execFileSync("bash", [localInstall, this.config.colonyRoot], {
+        stdio: "inherit",
+      });
+    } else {
+      // Strategy 2: Clone from GitHub and install
+      console.log("[commander] Cloning Termite Protocol from GitHub...");
+      const tmpDir = join(this.config.colonyRoot, ".termite-install-tmp");
+      try {
+        execFileSync("git", [
+          "clone", "--depth", "1",
+          "https://github.com/billbai-longarena/Termite-Protocol.git",
+          tmpDir,
+        ], { stdio: "inherit" });
+        execFileSync("bash", [join(tmpDir, "install.sh"), this.config.colonyRoot], {
+          stdio: "inherit",
+        });
+      } catch (err: any) {
+        console.error(
+          "[commander] Failed to install Termite Protocol automatically.\n" +
+            "Install it manually:\n" +
+            "  git clone https://github.com/billbai-longarena/Termite-Protocol /tmp/termite\n" +
+            `  bash /tmp/termite/install.sh ${this.config.colonyRoot}\n` +
+            "  rm -rf /tmp/termite",
+        );
+        throw new Error("Termite Protocol installation failed");
+      } finally {
+        // Cleanup temp clone
+        try {
+          const { rmSync } = await import("node:fs");
+          rmSync(tmpDir, { recursive: true, force: true });
+        } catch {}
+      }
+    }
     console.log("[commander] Termite Protocol installed.");
   }
 
