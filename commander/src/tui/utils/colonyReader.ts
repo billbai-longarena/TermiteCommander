@@ -9,8 +9,12 @@ export interface LockData {
 
 export interface WorkerData {
   id: string;
+  cli?: string;
+  model?: string;
+  pid?: number | null;
   status: "running" | "idle" | "stopped" | "errored" | "dead";
   sessionId: string | null;
+  runId?: string | null;
   startedAt: string;
 }
 

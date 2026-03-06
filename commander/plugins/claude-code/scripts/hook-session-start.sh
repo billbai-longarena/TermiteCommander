@@ -18,7 +18,7 @@ if commander_is_running "$COLONY_ROOT"; then
     DONE=$(grep -Eo '"done"[[:space:]]*:[[:space:]]*[0-9]+' "$STATUS_FILE" | head -1 | grep -Eo '[0-9]+')
     ACTIVE=$(grep -Eo '"activeWorkers"[[:space:]]*:[[:space:]]*[0-9]+' "$STATUS_FILE" | head -1 | grep -Eo '[0-9]+')
     echo "[Commander] Colony active. ${DONE:-0}/${TOTAL:-?} signals done. ${ACTIVE:-0} workers. Objective: ${OBJECTIVE:-unknown}"
-    echo "Use /commander for plan/status/stop/workers/resume commands, or run 'termite-commander dashboard --mode auto'."
+    echo "Use /commander for plan/status/stop/workers/resume commands; emergency stop: 'termite-commander fleet stop --colony \"$COLONY_ROOT\"'."
   else
     echo "[Commander] Colony active (no status snapshot yet)."
   fi

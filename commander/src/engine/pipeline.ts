@@ -65,6 +65,7 @@ export class Pipeline {
       id: w.id,
       cli: w.cli,
       model: w.model,
+      pid: w.process?.pid ?? null,
       status: w.status,
       sessionId: w.sessionId,
       runId: w.runId,

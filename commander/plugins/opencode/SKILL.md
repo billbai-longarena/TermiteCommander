@@ -25,6 +25,8 @@ Decomposes objectives into atomic signals that weak models (haiku-class) can exe
 | Daemon start | `termite-commander daemon start "<obj>" --plan .termite/worker/PLAN.md --colony "$PWD"` |
 | Daemon status | `termite-commander daemon status --colony "$PWD"` |
 | Daemon stop | `termite-commander daemon stop --colony "$PWD"` |
+| Fleet emergency stop + launchd check | `termite-commander fleet stop --colony "$PWD" --check-autostart --match termite` |
+| launchd autostart check/disable (macOS) | `termite-commander fleet autostart --match termite` / `termite-commander fleet autostart --match termite --disable` |
 | Workers | `termite-commander workers --colony "$PWD"` |
 | Logs | `termite-commander logs --colony "$PWD"` |
 | Stop | `termite-commander stop --colony "$PWD"` |
@@ -73,6 +75,7 @@ termite-commander init --colony "$PWD"
 - `commander.lock` — `{ pid, startedAt, objective }`. Presence = Commander running.
 - `.commander-status.json` — heartbeat snapshot: signal counts, worker states, model info.
 - `.commander-daemon.json` — daemon metadata for background starts.
+- Daemon mode is detached-process based (not launchd/systemd managed by default).
 - `.commander.events.log` — rotated runtime event log (preferred for issue reports).
 - `.termite/human/` — human draft zone (worker should ignore).
 - `.termite/worker/` — worker-facing context zone.

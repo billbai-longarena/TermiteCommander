@@ -78,6 +78,11 @@ termite-commander workers --colony "$PWD"
 termite-commander stop --colony "$PWD"
 ```
 
+Emergency one-shot fleet stop (commander + known worker pids + optional launchd check):
+```bash
+termite-commander fleet stop --colony "$PWD" --check-autostart --match termite
+```
+
 ### Resume
 ```bash
 termite-commander resume --colony "$PWD"
@@ -98,6 +103,12 @@ termite-commander dashboard --mode auto
 termite-commander daemon start "<objective>" --plan .termite/worker/PLAN.md --colony "$PWD"
 termite-commander daemon status --colony "$PWD"
 termite-commander daemon stop --colony "$PWD"
+```
+
+Launchd autostart guard (macOS):
+```bash
+termite-commander fleet autostart --match termite
+termite-commander fleet autostart --match termite --disable
 ```
 
 ## Model Configuration
@@ -181,6 +192,7 @@ termite-commander doctor --config --credentials --runtime
 - Status snapshots written to `.commander-status.json` on every heartbeat cycle.
 - Use `termite-commander dashboard --mode auto` (or `termite-commander`) to open dashboard in a separate terminal.
 - Use `termite-commander daemon start ...` for managed background runs with inherited env/PATH.
+- Daemon mode is a detached Commander child process, not launchd/systemd by default.
 - Runtime logs are captured in `.commander.events.log` (rotated), with optional legacy output in `.commander.log`.
 - Commander does NOT do research or design — that's your job. Commander only decomposes and orchestrates.
 - Use `.termite/human/` for unstable drafts and `.termite/worker/` for worker-facing finalized context.

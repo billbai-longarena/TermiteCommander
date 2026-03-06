@@ -417,6 +417,8 @@ termite-commander doctor [--config] [--credentials] [--runtime]  Run diagnostics
 termite-commander daemon start <objective>  Start background commander run (inherits current env + PATH)
 termite-commander daemon status        Show daemon metadata + liveness
 termite-commander daemon stop          Stop daemon + commander runtime
+termite-commander fleet stop           One-shot stop fleet (daemon + commander + worker pids) + optional launchd guard
+termite-commander fleet autostart      Check/disable launchd autostart jobs that may re-spawn commander
 termite-commander workers [--json]     Worker status
 termite-commander logs                 Tail issue-ready logs (`.commander.events.log` preferred)
 termite-commander stop                 Stop all + cleanup stale state
@@ -431,7 +433,8 @@ termite-commander watch                Polling status (non-TUI)
 Full-screen terminal dashboard (alternate screen buffer):
 
 - **Signal progress** — bar + full list from DB with status/type/worker
-- **Signal details** — full signal content (`next_hint`, parent/depth, module/tags, parked metadata)
+- **Signal list scrollbar** — large signal sets are scrollable (`j/k` or arrow keys, `PgUp/PgDn`, `g/G`)
+- **Signal details** — selected signal shows full content (`next_hint`, parent/depth, module/tags, parked metadata)
 - **Worker status** — model labels, session IDs, duration, stale detection (dead workers marked with cleanup instructions)
 - **Git commits** — real-time feed from worker commits
 - **Activity log** — tails `.commander.events.log` (falls back to `.commander.log`)
@@ -449,6 +452,8 @@ termite-commander daemon status --colony .
 termite-commander daemon stop --colony .
 ```
 
+Daemon mode is a detached Commander child process (not launchd/systemd managed by default).
+
 Daemon logs are written to:
 - `.termite/logs/commander-daemon.out.log`
 - `.termite/logs/commander-daemon.err.log`
@@ -461,6 +466,15 @@ Daemon logs are written to:
 - Recommended preflight:
   1. `termite-commander doctor --config --credentials --runtime --colony .`
   2. `termite-commander daemon start "<objective>" --colony .`
+- Emergency stop + autostart guard:
+  1. `termite-commander fleet stop --colony . --check-autostart --match termite`
+  2. If jobs keep auto-restarting: `termite-commander fleet autostart --match termite --disable`
+
+### CLI Entry (Claude/OpenCode/Codex)
+
+- **Claude Code**: run `/commander` for orchestration; runtime control commands are shell commands (for example `termite-commander fleet stop --colony .`).
+- **OpenCode**: run `/commander`; use the same shell commands for daemon/dashboard/stop/autostart guard.
+- **Codex CLI**: call `termite-commander ...` commands directly in terminal (same command set as above).
 
 ---
 

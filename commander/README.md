@@ -68,6 +68,19 @@ termite-commander config import --from auto --apply
 termite-commander doctor --config --runtime
 ```
 
+## Fleet Safety (Stop + Autostart Guard)
+
+```bash
+# One-shot stop (daemon + commander + known worker pids)
+termite-commander fleet stop --colony .
+
+# macOS launchd autostart check/disable
+termite-commander fleet autostart --match termite
+termite-commander fleet autostart --match termite --disable
+```
+
+Daemon mode is detached-process based by default (not launchd/systemd managed).
+
 ## Full Documentation
 
 - English: https://github.com/billbai-longarena/TermiteCommander/blob/master/README.md

@@ -73,7 +73,7 @@ export function useColonyState(
             open: bridgeStatus.open ?? 0,
             claimed: bridgeStatus.claimed ?? 0,
             done: bridgeStatus.done ?? 0,
-            blocked: 0,
+            blocked: bridgeStatus.blocked ?? 0,
           },
           signals,
           lockData,

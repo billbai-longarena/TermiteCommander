@@ -1,5 +1,5 @@
 import React from "react";
-import { Box, Text, useStdout } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import { useColonyState } from "./hooks/useColonyState.js";
 import { useGitCommits } from "./hooks/useGitCommits.js";
 import { useLogTail } from "./hooks/useLogTail.js";
@@ -17,6 +17,7 @@ interface MonitorAppProps {
 export function MonitorApp({ colonyRoot }: MonitorAppProps) {
   const { stdout } = useStdout();
   const termWidth = stdout?.columns ?? 80;
+  const termRows = stdout?.rows ?? 40;
   const colony = useColonyState(colonyRoot);
   const commits = useGitCommits(colonyRoot);
   const logLines = useLogTail(colonyRoot);
@@ -60,6 +61,79 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
   const modelsInfo = (statusData as any)?.models;
   const commanderModel = modelsInfo?.commander ?? "";
   const workersFleetStr = modelsInfo?.workers ?? "";
+
+  const signalViewport = Math.max(4, Math.min(12, termRows - 30));
+  const [signalCursor, setSignalCursor] = React.useState(0);
+  const [signalOffset, setSignalOffset] = React.useState(0);
+
+  const clamp = (value: number, min: number, max: number): number =>
+    Math.max(min, Math.min(max, value));
+
+  const updateSignalWindow = React.useCallback(
+    (targetCursor: number) => {
+      if (signals.length <= 0) {
+        setSignalCursor(0);
+        setSignalOffset(0);
+        return;
+      }
+
+      const maxCursor = signals.length - 1;
+      const nextCursor = clamp(targetCursor, 0, maxCursor);
+      const maxOffset = Math.max(0, signals.length - signalViewport);
+
+      setSignalCursor(nextCursor);
+      setSignalOffset((prev) => {
+        let nextOffset = clamp(prev, 0, maxOffset);
+        if (nextCursor < nextOffset) {
+          nextOffset = nextCursor;
+        } else if (nextCursor >= nextOffset + signalViewport) {
+          nextOffset = nextCursor - signalViewport + 1;
+        }
+        return clamp(nextOffset, 0, maxOffset);
+      });
+    },
+    [signalViewport, signals.length],
+  );
+
+  React.useEffect(() => {
+    if (signals.length === 0) {
+      setSignalCursor(0);
+      setSignalOffset(0);
+      return;
+    }
+    const maxCursor = signals.length - 1;
+    const maxOffset = Math.max(0, signals.length - signalViewport);
+    setSignalCursor((prev) => clamp(prev, 0, maxCursor));
+    setSignalOffset((prev) => clamp(prev, 0, maxOffset));
+  }, [signalViewport, signals.length]);
+
+  useInput((input, key) => {
+    if (signals.length === 0) return;
+
+    if (key.upArrow || input === "k") {
+      updateSignalWindow(signalCursor - 1);
+      return;
+    }
+    if (key.downArrow || input === "j") {
+      updateSignalWindow(signalCursor + 1);
+      return;
+    }
+    if (key.pageUp) {
+      updateSignalWindow(signalCursor - signalViewport);
+      return;
+    }
+    if (key.pageDown || input === " ") {
+      updateSignalWindow(signalCursor + signalViewport);
+      return;
+    }
+    if (input === "g") {
+      updateSignalWindow(0);
+      return;
+    }
+    if (input === "G") {
+      updateSignalWindow(signals.length - 1);
+    }
+  });
 
   return (
     <Box flexDirection="column">
@@ -136,8 +210,10 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
           {signals.length > 0 ? (
             <SignalList
               signals={signals}
-              maxItems={signals.length}
+              maxItems={signalViewport}
               termWidth={termWidth}
+              offset={signalOffset}
+              selectedIndex={signalCursor}
             />
           ) : (
             <Text dimColor>
@@ -171,7 +247,7 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
       {/* Footer */}
       <Box marginTop={1}>
         <Text dimColor>
-          {"  Ctrl+C to exit | /commander in Claude Code/OpenCode to control"}
+          {"  Ctrl+C exit | j/k/↑/↓ scroll signals | PgUp/PgDn jump | g/G first/last"}
         </Text>
       </Box>
 

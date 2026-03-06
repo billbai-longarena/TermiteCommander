@@ -4,8 +4,19 @@ import { program } from "commander";
 import { Pipeline, type PipelineConfig } from "./engine/pipeline.js";
 import { SignalBridge } from "./colony/signal-bridge.js";
 import { resolve, join } from "node:path";
-import { existsSync, readFileSync, unlinkSync, mkdirSync, openSync, closeSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import {
+  existsSync,
+  readFileSync,
+  unlinkSync,
+  mkdirSync,
+  openSync,
+  closeSync,
+  writeFileSync,
+  readdirSync,
+  renameSync,
+} from "node:fs";
+import { spawn, execFileSync } from "node:child_process";
+import { homedir } from "node:os";
 import {
   readTermiteConfigWithPath,
   resolveModels,
@@ -236,12 +247,206 @@ function resolveWorkerCredentialStatuses(models: ResolvedModels): WorkerCredenti
   return results;
 }
 
-function stopCommanderProcess(colonyRoot: string, force: boolean): void {
+function runLaunchctl(args: string[]): { ok: boolean; stdout: string; stderr: string } {
+  try {
+    const stdout = execFileSync("launchctl", args, {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { ok: true, stdout, stderr: "" };
+  } catch (err: any) {
+    return {
+      ok: false,
+      stdout: err?.stdout?.toString?.() ?? "",
+      stderr: err?.stderr?.toString?.() ?? err?.message ?? "unknown error",
+    };
+  }
+}
+
+function parseWorkerPids(statusFilePath: string): number[] {
+  if (!existsSync(statusFilePath)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(statusFilePath, "utf-8"));
+    const workers = Array.isArray(parsed?.workers) ? parsed.workers : [];
+    const pids = workers
+      .map((worker: any) => worker?.pid)
+      .filter((pid: unknown) => typeof pid === "number" && Number.isInteger(pid) && pid > 0) as number[];
+    return [...new Set(pids)];
+  } catch {
+    return [];
+  }
+}
+
+function signalProcess(
+  pid: number,
+  signal: NodeJS.Signals,
+  label: string,
+  opts?: { force?: boolean },
+): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (pid === process.pid) return false;
+  try {
+    process.kill(pid, signal);
+    console.log(`${label}: sent ${signal} to PID ${pid}.`);
+    return true;
+  } catch (err: any) {
+    if (err?.code === "ESRCH") {
+      if (!opts?.force) {
+        console.log(`${label}: PID ${pid} already exited.`);
+      }
+      return false;
+    }
+    console.warn(`${label}: failed to signal PID ${pid}: ${err?.message ?? "unknown error"}`);
+    return false;
+  }
+}
+
+interface LaunchdPlistMatch {
+  path: string;
+  label: string;
+}
+
+interface LaunchdGuardResult {
+  platform: string;
+  supported: boolean;
+  token: string;
+  loadedLabels: string[];
+  plistMatches: LaunchdPlistMatch[];
+  disabledPlists: string[];
+  errors: string[];
+}
+
+function parseLaunchdLabel(plistContent: string, fallback: string): string {
+  const m = plistContent.match(/<key>\s*Label\s*<\/key>\s*<string>\s*([^<]+)\s*<\/string>/i);
+  return (m?.[1] ?? fallback).trim();
+}
+
+function collectLaunchdMatches(token: string): LaunchdGuardResult {
+  const tokenNormalized = token.trim().toLowerCase() || "termite";
+  const result: LaunchdGuardResult = {
+    platform: process.platform,
+    supported: process.platform === "darwin",
+    token: tokenNormalized,
+    loadedLabels: [],
+    plistMatches: [],
+    disabledPlists: [],
+    errors: [],
+  };
+
+  if (!result.supported) {
+    return result;
+  }
+
+  const list = runLaunchctl(["list"]);
+  if (!list.ok) {
+    result.errors.push(`launchctl list failed: ${list.stderr || "unknown error"}`);
+  } else {
+    const lines = list.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+    for (const line of lines.slice(1)) {
+      const cols = line.split(/\s+/);
+      if (cols.length < 3) continue;
+      const label = cols.slice(2).join(" ");
+      if (label.toLowerCase().includes(tokenNormalized)) {
+        result.loadedLabels.push(label);
+      }
+    }
+  }
+
+  const launchAgentsDir = join(homedir(), "Library", "LaunchAgents");
+  if (!existsSync(launchAgentsDir)) {
+    return result;
+  }
+
+  for (const file of readdirSync(launchAgentsDir)) {
+    if (!file.endsWith(".plist")) continue;
+    const path = join(launchAgentsDir, file);
+    let content = "";
+    try {
+      content = readFileSync(path, "utf-8");
+    } catch {
+      continue;
+    }
+    const label = parseLaunchdLabel(content, file.replace(/\.plist$/, ""));
+    const haystack = `${file}\n${label}\n${content}`.toLowerCase();
+    if (haystack.includes(tokenNormalized)) {
+      result.plistMatches.push({ path, label });
+    }
+  }
+
+  return result;
+}
+
+function printLaunchdGuard(result: LaunchdGuardResult): void {
+  if (!result.supported) {
+    console.log(`Autostart guard: launchd scan is only available on macOS (current: ${result.platform}).`);
+    return;
+  }
+  console.log(`Autostart guard token: "${result.token}"`);
+  if (result.errors.length > 0) {
+    for (const err of result.errors) {
+      console.warn(`  - ${err}`);
+    }
+  }
+  if (result.loadedLabels.length === 0) {
+    console.log("  Loaded launchd jobs: none");
+  } else {
+    console.log("  Loaded launchd jobs:");
+    for (const label of result.loadedLabels) {
+      console.log(`    - ${label}`);
+    }
+  }
+  if (result.plistMatches.length === 0) {
+    console.log("  LaunchAgents plists: none");
+  } else {
+    console.log("  LaunchAgents plists:");
+    for (const item of result.plistMatches) {
+      console.log(`    - ${item.label} (${item.path})`);
+    }
+  }
+}
+
+function disableLaunchdAutostart(result: LaunchdGuardResult): LaunchdGuardResult {
+  if (!result.supported) return result;
+  const uid = typeof process.getuid === "function" ? String(process.getuid()) : "";
+  for (const item of result.plistMatches) {
+    if (uid) {
+      const byPath = runLaunchctl(["bootout", `gui/${uid}`, item.path]);
+      if (!byPath.ok) {
+        const byLabel = runLaunchctl(["bootout", `gui/${uid}/${item.label}`]);
+        if (!byLabel.ok) {
+          runLaunchctl(["remove", item.label]);
+        }
+      }
+    } else {
+      runLaunchctl(["remove", item.label]);
+    }
+
+    const disabledPath = `${item.path}.disabled`;
+    try {
+      if (!existsSync(disabledPath)) {
+        renameSync(item.path, disabledPath);
+      }
+      result.disabledPlists.push(disabledPath);
+    } catch (err: any) {
+      result.errors.push(`Failed to disable ${item.path}: ${err?.message ?? "unknown error"}`);
+    }
+  }
+  return result;
+}
+
+function stopCommanderProcess(
+  colonyRoot: string,
+  force: boolean,
+  opts?: { stopWorkers?: boolean },
+): void {
   const lockPath = join(colonyRoot, "commander.lock");
   const statusFilePath = join(colonyRoot, ".commander-status.json");
+  const stopWorkers = opts?.stopWorkers ?? true;
 
   let lockData: { pid: number; startedAt: string; objective: string } | null = null;
   let statusPid: number | null = null;
+
+  const workerPids = stopWorkers ? parseWorkerPids(statusFilePath) : [];
 
   if (existsSync(statusFilePath)) {
     try {
@@ -253,11 +458,11 @@ function stopCommanderProcess(colonyRoot: string, force: boolean): void {
   }
 
   if (!existsSync(lockPath)) {
-    if (!force) {
+    if (!force && !statusPid && workerPids.length === 0) {
       console.log("No commander.lock found. Commander is not running.");
       return;
     }
-    console.log("No commander.lock found. --force enabled: cleaning stale status files.");
+    console.log("No commander.lock found. Continuing with status/worker cleanup.");
   } else {
     try {
       lockData = JSON.parse(readFileSync(lockPath, "utf-8"));
@@ -270,25 +475,27 @@ function stopCommanderProcess(colonyRoot: string, force: boolean): void {
     }
   }
 
-  if (lockData?.pid) {
-    console.log(`Stopping Commander (PID ${lockData.pid})...`);
-    try {
-      process.kill(lockData.pid, "SIGTERM");
-      console.log("SIGTERM sent.");
-    } catch (err: any) {
-      if (err.code === "ESRCH") {
-        console.log("Process not found (already exited).");
-      } else {
-        console.error(`Failed to kill process: ${err.message}`);
+  const commanderPids = new Set<number>();
+  if (lockData?.pid) commanderPids.add(lockData.pid);
+  if (statusPid && (!lockData || statusPid !== lockData.pid)) commanderPids.add(statusPid);
+
+  if (commanderPids.size > 0) {
+    for (const pid of commanderPids) {
+      signalProcess(pid, "SIGTERM", "Commander");
+      if (force && isProcessAlive(pid)) {
+        signalProcess(pid, "SIGKILL", "Commander", { force: true });
       }
     }
   }
 
-  if (force && statusPid && (!lockData || statusPid !== lockData.pid)) {
-    try {
-      process.kill(statusPid, "SIGTERM");
-      console.log(`Force cleanup: sent SIGTERM to orphan status PID ${statusPid}.`);
-    } catch {}
+  if (stopWorkers && workerPids.length > 0) {
+    console.log(`Stopping worker fleet (${workerPids.length})...`);
+    for (const pid of workerPids) {
+      signalProcess(pid, "SIGTERM", "Worker");
+      if (force && isProcessAlive(pid)) {
+        signalProcess(pid, "SIGKILL", "Worker", { force: true });
+      }
+    }
   }
 
   try {
@@ -1568,6 +1775,7 @@ Examples:
     console.log(`Objective: ${metadata.objective}`);
     console.log(`Out log:   ${metadata.outLog}`);
     console.log(`Err log:   ${metadata.errLog}`);
+    console.log("Daemon mode uses a detached Commander process (not launchd/systemd managed).");
     console.log("Use 'termite-commander daemon status --colony .' to inspect runtime health.");
   });
 
@@ -1588,6 +1796,7 @@ daemonCommand
     console.log(`  Objective: ${metadata.objective}`);
     console.log(`  Out log: ${metadata.outLog}`);
     console.log(`  Err log: ${metadata.errLog}`);
+    console.log("  Mode: detached process (not launchd/systemd managed)");
 
     const lockData = getCommanderLockData(opts.colony);
     if (lockData) {
@@ -1612,6 +1821,89 @@ daemonCommand
       } catch {}
     }
     stopCommanderProcess(opts.colony, opts.force);
+  });
+
+const fleetCommand = program
+  .command("fleet")
+  .description("Fleet safety controls: one-shot stop + launchd autostart guard");
+
+fleetCommand
+  .command("stop")
+  .description("One-shot stop commander + workers + daemon metadata")
+  .option("-c, --colony <path>", "Colony root directory", process.cwd())
+  .option("--force", "Force SIGKILL for stubborn commander/worker processes", false)
+  .option("--no-check-autostart", "Skip launchd autostart check after stop")
+  .option("--disable-autostart", "Disable matched launchd jobs and .plist files", false)
+  .option("--match <token>", "launchd match token (default: termite)", "termite")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  termite-commander fleet stop --colony .
+  termite-commander fleet stop --colony . --force --check-autostart --match termite
+  termite-commander fleet stop --colony . --disable-autostart --match termite
+`
+  )
+  .action((opts: {
+    colony: string;
+    force: boolean;
+    checkAutostart: boolean;
+    disableAutostart: boolean;
+    match: string;
+  }) => {
+    const metadata = readDaemonMetadata(opts.colony);
+    if (metadata && isProcessAlive(metadata.pid)) {
+      console.log(`Stopping daemon launcher process (PID ${metadata.pid})...`);
+      signalProcess(metadata.pid, "SIGTERM", "Daemon");
+      if (opts.force && isProcessAlive(metadata.pid)) {
+        signalProcess(metadata.pid, "SIGKILL", "Daemon", { force: true });
+      }
+    }
+
+    stopCommanderProcess(opts.colony, opts.force, { stopWorkers: true });
+
+    if (!opts.checkAutostart) {
+      return;
+    }
+
+    let guard = collectLaunchdMatches(opts.match);
+    if (opts.disableAutostart) {
+      guard = disableLaunchdAutostart(guard);
+    }
+    printLaunchdGuard(guard);
+    if (guard.disabledPlists.length > 0) {
+      console.log("Autostart guard: disabled LaunchAgents:");
+      for (const path of guard.disabledPlists) {
+        console.log(`  - ${path}`);
+      }
+    }
+  });
+
+fleetCommand
+  .command("autostart")
+  .description("Check (or disable) launchd autostart jobs matching a token")
+  .option("--match <token>", "launchd match token (default: termite)", "termite")
+  .option("--disable", "Disable matched launchd jobs and .plist files", false)
+  .addHelpText(
+    "after",
+    `
+Examples:
+  termite-commander fleet autostart --match termite
+  termite-commander fleet autostart --match termite --disable
+`
+  )
+  .action((opts: { match: string; disable: boolean }) => {
+    let guard = collectLaunchdMatches(opts.match);
+    if (opts.disable) {
+      guard = disableLaunchdAutostart(guard);
+    }
+    printLaunchdGuard(guard);
+    if (guard.disabledPlists.length > 0) {
+      console.log("Disabled LaunchAgents:");
+      for (const path of guard.disabledPlists) {
+        console.log(`  - ${path}`);
+      }
+    }
   });
 
 program
@@ -1689,9 +1981,9 @@ Examples:
 
 program
   .command("stop")
-  .description("Stop a running Commander process")
+  .description("Stop commander runtime and known worker processes")
   .option("-c, --colony <path>", "Colony root directory", process.cwd())
-  .option("--force", "Force cleanup lock/status and try killing orphan commander pid", false)
+  .option("--force", "Force cleanup lock/status and SIGKILL stubborn commander/worker pids", false)
   .addHelpText(
     "after",
     `
@@ -1745,14 +2037,15 @@ Examples:
     }
 
     console.log(`Workers (${workers.length}):`);
-    console.log("  ID                              CLI      MODEL                     STATUS    SESSION             STARTED");
-    console.log("  " + "-".repeat(120));
+    console.log("  ID                              CLI      MODEL                     PID      STATUS    SESSION             STARTED");
+    console.log("  " + "-".repeat(128));
     for (const w of workers) {
       const sid = w.sessionId ? w.sessionId.slice(0, 16) + "..." : "-";
       const started = w.startedAt ? new Date(w.startedAt).toLocaleTimeString() : "-";
       const cli = (w.cli ?? "-").toString();
       const model = (w.model ?? "-").toString();
-      console.log(`  ${w.id.padEnd(34)}${cli.padEnd(9)}${model.padEnd(26)}${w.status.padEnd(10)}${sid.padEnd(20)}${started}`);
+      const pid = typeof w.pid === "number" ? String(w.pid) : "-";
+      console.log(`  ${w.id.padEnd(34)}${cli.padEnd(9)}${model.padEnd(26)}${pid.padEnd(9)}${w.status.padEnd(10)}${sid.padEnd(20)}${started}`);
     }
   });
 

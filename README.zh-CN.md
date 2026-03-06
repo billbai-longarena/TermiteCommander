@@ -417,6 +417,8 @@ termite-commander doctor [--config] [--credentials] [--runtime]  运行诊断（
 termite-commander daemon start <目标>    后台启动 Commander（继承当前 shell 的 env + PATH）
 termite-commander daemon status        查看 daemon 元数据与存活状态
 termite-commander daemon stop          停止 daemon 与 Commander 运行
+termite-commander fleet stop           一键停舰队（daemon + commander + worker pid）并可附带 launchd 检查
+termite-commander fleet autostart      检查/关闭会自动拉起 commander 的 launchd 项
 termite-commander workers [--json]     工人状态
 termite-commander logs                 输出 issue 诊断日志（优先 `.commander.events.log`）
 termite-commander stop                 停止所有 + 清理过期状态
@@ -431,7 +433,8 @@ termite-commander watch                轮询状态（非 TUI）
 全屏终端仪表盘（alternate screen buffer）：
 
 - **信号进度** — 进度条 + 数据库全量信号列表（状态/类型/工人）
-- **信号详情** — 完整信号内容（`next_hint`、父子关系、module/tags、parked 元信息）
+- **信号滚动条** — 信号很多时可滚动（`j/k` 或方向键，`PgUp/PgDn`，`g/G`）
+- **信号详情** — 展示当前选中信号的完整内容（`next_hint`、父子关系、module/tags、parked 元信息）
 - **工人状态** — 模型标签、会话 ID、运行时长、过期检测（死亡工人标记清理指引）
 - **Git 提交** — 工人提交的实时动态
 - **活动日志** — 优先跟踪 `.commander.events.log`（无则回退 `.commander.log`）
@@ -449,6 +452,8 @@ termite-commander daemon status --colony .
 termite-commander daemon stop --colony .
 ```
 
+daemon 模式默认是 Commander 分离子进程（不是 launchd/systemd 托管）。
+
 daemon 日志路径：
 - `.termite/logs/commander-daemon.out.log`
 - `.termite/logs/commander-daemon.err.log`
@@ -461,6 +466,15 @@ daemon 日志路径：
 - 推荐启动前检查：
   1. `termite-commander doctor --config --credentials --runtime --colony .`
   2. `termite-commander daemon start "<目标>" --colony .`
+- 紧急停舰队 + 反自启动检查：
+  1. `termite-commander fleet stop --colony . --check-autostart --match termite`
+  2. 若仍被自动拉起：`termite-commander fleet autostart --match termite --disable`
+
+### 各 CLI 执行入口（Claude/OpenCode/Codex）
+
+- **Claude Code**：通过 `/commander` 触发编排；运行控制命令走 shell（例如 `termite-commander fleet stop --colony .`）。
+- **OpenCode**：通过 `/commander` 触发；daemon/dashboard/stop/反自启动检查都走同一套 shell 命令。
+- **Codex CLI**：直接在终端执行 `termite-commander ...`，命令集与上面一致。
 
 ---
 
