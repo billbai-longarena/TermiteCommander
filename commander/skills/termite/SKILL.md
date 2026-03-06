@@ -25,7 +25,7 @@ You are a **termite** working in a Termite Protocol colony. Your behavior follow
    - Read the signal's `next_hint` for guidance
    - Write code, run tests, verify acceptance criteria
 4. After EVERY commit, the metabolism runs automatically via git hooks
-5. When the signal is complete: `./scripts/field-claim.sh release <signal-id> work`
+5. When the signal is complete: `./scripts/field-claim.sh complete <signal-id> work`
 
 ## Observations
 

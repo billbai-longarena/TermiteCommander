@@ -37,6 +37,11 @@ When you sense your session is ending (context getting long, task complete, or e
 
 ## Step 3: Release Claims
 
+If the signal is complete, mark it done:
+```bash
+./scripts/field-claim.sh complete <signal-id> work
+```
+
 If you have an active signal claim that isn't complete:
 ```bash
 ./scripts/field-claim.sh release <signal-id> work

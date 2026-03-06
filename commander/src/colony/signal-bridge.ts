@@ -106,7 +106,15 @@ export class SignalBridge {
   }
 
   async status(): Promise<ColonyStatus> {
-    const script = `${this.dbPreamble()} && echo "$(db_signal_count "status='open'")|$(db_signal_count "status='claimed'")|$(db_signal_count "status IN ('done','completed')")|$(db_signal_count)"`;
+    const script =
+      `${this.dbPreamble()} && ` +
+      `LIVE_OPEN=$(db_signal_count "status='open'") && ` +
+      `LIVE_CLAIMED=$(db_signal_count "status='claimed'") && ` +
+      `LIVE_BLOCKED=$(db_signal_count "status='blocked'") && ` +
+      `LIVE_DONE=$(db_signal_count "status IN ('done','completed')") && ` +
+      `ARCHIVED_DONE=$(db_exec "SELECT COUNT(*) FROM archive WHERE original_table='signals' AND archive_reason='done';" 2>/dev/null || echo 0) && ` +
+      `ACTIONABLE=$(db_signal_count "status NOT IN ('parked','done','completed')") && ` +
+      `echo "$LIVE_OPEN|$LIVE_CLAIMED|$LIVE_BLOCKED|$LIVE_DONE|$ARCHIVED_DONE|$ACTIONABLE"`;
 
     const result = await this.exec("bash", ["-c", script]);
 
@@ -114,19 +122,23 @@ export class SignalBridge {
       return { total: 0, open: 0, claimed: 0, done: 0, blocked: 0 };
     }
 
-    const [open, claimed, done, total] = result.stdout.split("|").map(Number);
+    const [open, claimed, blocked, liveDone, archivedDone, actionable] = result.stdout
+      .split("|")
+      .map(Number);
+    const done = (liveDone || 0) + (archivedDone || 0);
+    const total = (actionable || 0) + done;
     return {
       total: total || 0,
       open: open || 0,
       claimed: claimed || 0,
       done: done || 0,
-      blocked: 0,
+      blocked: blocked || 0,
     };
   }
 
   async listSignals(): Promise<SignalDetail[]> {
     const script =
-      `${this.dbPreamble()} && sqlite3 -separator '|' "$PROJECT_ROOT/.termite/termite.db" ` +
+      `${this.dbPreamble()} && sqlite3 -separator '|' "$TERMITE_DB" ` +
       `"SELECT id, type, title, status, weight, owner, module, tags, next_hint, touch_count, source, parent_id, child_hint, depth, parked_reason, parked_conditions, created, last_touched FROM signals ORDER BY CASE status WHEN 'claimed' THEN 1 WHEN 'open' THEN 2 ELSE 3 END, created ASC"`;
 
     const result = await this.exec("bash", ["-c", script]);
