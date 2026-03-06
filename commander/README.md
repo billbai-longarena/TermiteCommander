@@ -21,6 +21,16 @@ termite-commander --version
 termite-commander --help
 ```
 
+## Quick Start (First Run)
+
+```bash
+cd /path/to/your-project
+termite-commander init --colony .
+termite-commander plan "Build <objective>" --plan .termite/worker/PLAN.md --colony . --run
+```
+
+`init` performs: protocol install (if missing) + skills install + config bootstrap + doctor preflight.
+
 ## Requirements
 
 - Node.js >= 18
@@ -54,8 +64,8 @@ termite-commander config bootstrap --from auto
 # Apply to termite.config.json
 termite-commander config import --from auto --apply
 
-# Validate resolved config + provider credentials
-termite-commander doctor --config
+# Validate resolved config + provider credentials + worker runtime/model compatibility
+termite-commander doctor --config --runtime
 ```
 
 ## Full Documentation

@@ -42,6 +42,11 @@ GOOD: "Add Redis cache to src/api/users.ts getUsers(): TTL 300s, key format
 
 ## Commands
 
+### First Run (recommended)
+```bash
+termite-commander init --colony "$PWD"
+```
+
 ### Start Colony Work
 
 Two ways to provide design context:
@@ -147,10 +152,10 @@ Priority: termite.config.json > opencode.json > env vars > defaults (except comm
 
 Recommended flow:
 ```bash
-termite-commander config bootstrap --from auto
+termite-commander init --colony "$PWD"
 # Optional: if you need to preserve existing fields strictly:
 termite-commander config import --from auto --apply
-termite-commander doctor --config
+termite-commander doctor --config --runtime
 ```
 
 ## Routing Logic

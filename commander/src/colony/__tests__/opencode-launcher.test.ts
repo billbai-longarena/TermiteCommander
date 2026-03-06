@@ -128,6 +128,39 @@ describe("OpenCodeLauncher", () => {
     expect(result.required).toEqual(["codex"]);
   });
 
+  it("builds deduped runtime/model targets from worker specs", () => {
+    const launcher = createLauncher([
+      { cli: "opencode", model: "anthropic/claude-haiku-3-5", count: 2 },
+      { cli: "opencode", model: "anthropic/claude-haiku-3-5", count: 1 },
+      { cli: "codex", model: "openai/gpt-5-codex", count: 1 },
+    ]);
+    expect(launcher.getRuntimeModelTargets()).toEqual([
+      { runtime: "opencode", model: "anthropic/claude-haiku-3-5" },
+      { runtime: "codex", model: "openai/gpt-5-codex" },
+    ]);
+  });
+
+  it("runs opencode runtime smoke test with model", async () => {
+    const launcher = createLauncher([{ cli: "opencode", model: "opencode/gpt-5-nano", count: 1 }]);
+    const probe = await launcher.smokeTestRuntimeModel("opencode", "opencode/gpt-5-nano", 12000);
+    expect(probe.ok).toBe(true);
+    expect(probe.skipped).toBe(false);
+    expect(execFileMock).toHaveBeenCalledWith(
+      "opencode",
+      expect.arrayContaining(["run", "Reply with exactly: OK", "--format", "json", "--model", "opencode/gpt-5-nano"]),
+      { timeout: 12000 },
+      expect.any(Function),
+    );
+  });
+
+  it("skips openclaw runtime smoke test in doctor preflight", async () => {
+    const launcher = createLauncher([{ cli: "openclaw", model: "coding-fast", count: 1 }]);
+    const probe = await launcher.smokeTestRuntimeModel("openclaw", "coding-fast");
+    expect(probe.ok).toBe(true);
+    expect(probe.skipped).toBe(true);
+    expect(probe.detail).toContain("Skipped");
+  });
+
   it("launches opencode worker with title and model args", async () => {
     const launcher = createLauncher();
     await launcher.launchWorker("anthropic/claude-haiku-3-5", "opencode", "worker-1");

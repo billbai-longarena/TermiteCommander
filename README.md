@@ -257,11 +257,17 @@ cd ~/your-project
 claude    # or: opencode
 ```
 
-**Step 2** — Install Commander skills into the project (once per project):
+**Step 2** — One-shot initialization (recommended):
 ```bash
-termite-commander install --colony .
+termite-commander init --colony .
 ```
-This installs:
+This performs:
+- Termite Protocol install (if missing): creates `AGENTS.md` / `CLAUDE.md` + scripts/signals
+- Commander skills/plugin install
+- Model config bootstrap from opencode/claude/codex configs
+- Doctor preflight (`config + credentials + runtime/model smoke tests`)
+
+It installs:
 - `.claude/plugins/termite-commander/` — Claude Code plugin (SessionStart hook + /commander skill)
 - `.opencode/skill/commander/` — OpenCode commander skill
 - `.opencode/skill/termite/` — Termite Protocol skill (workers use this to claim signals and deposit pheromones)
@@ -335,7 +341,7 @@ termite-commander config import --from auto --apply
 termite-commander config import --from auto --apply --force
 
 # Run health check (fails if commander model or provider credentials are missing)
-termite-commander doctor --config
+termite-commander doctor --config --runtime
 ```
 
 ```bash
@@ -390,6 +396,7 @@ OpenClaw note: `openclaw agent` requires routing context (`--agent` / `--to` / `
 
 ```
 termite-commander                      TUI dashboard (full-screen, real-time)
+termite-commander init                 One-shot init (protocol + skills + config bootstrap + doctor)
 termite-commander install              Install skills into project
 termite-commander plan <objective>     Decompose and execute
   --plan <file>                          Design document as context
@@ -405,7 +412,7 @@ termite-commander config import         Import/recommend model config from other
 termite-commander config bootstrap      One-shot import+merge+doctor tool (skill-friendly)
   --from <auto|opencode|claude|codex>    Source selection (default: auto)
   --force                                 Overwrite existing fields
-termite-commander doctor [--config]     Run diagnostics (non-zero exit on config/credential errors)
+termite-commander doctor [--config] [--runtime]  Run diagnostics (non-zero exit on config/credential/runtime failures)
 termite-commander workers [--json]     Worker status
 termite-commander stop                 Stop all + cleanup stale state
 termite-commander resume               Resume from halt

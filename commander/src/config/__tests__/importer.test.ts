@@ -83,6 +83,11 @@ describe("importExternalConfig", () => {
     const result = importExternalConfig(tempDir, "claude");
     expect(result.selected?.source).toBe("claude");
     expect(result.selected?.recommended?.commander?.model).toBe("anthropic/claude-sonnet-4-5");
+    expect(result.selected?.recommended?.commander?.default_worker_cli).toBe("claude");
+    expect(result.selected?.recommended?.commander?.default_worker_model).toBe("anthropic/claude-sonnet-4-5");
+    expect(result.selected?.recommended?.commander?.workers).toEqual([
+      { cli: "claude", model: "anthropic/claude-sonnet-4-5", count: 1 },
+    ]);
   });
 
   it("imports from Codex TOML using defaults section", () => {
@@ -100,6 +105,11 @@ model = "gpt-5-codex"
     const result = importExternalConfig(tempDir, "codex");
     expect(result.selected?.source).toBe("codex");
     expect(result.selected?.recommended?.commander?.model).toBe("openai/gpt-5-codex");
+    expect(result.selected?.recommended?.commander?.default_worker_cli).toBe("codex");
+    expect(result.selected?.recommended?.commander?.default_worker_model).toBe("openai/gpt-5-codex");
+    expect(result.selected?.recommended?.commander?.workers).toEqual([
+      { cli: "codex", model: "openai/gpt-5-codex", count: 1 },
+    ]);
   });
 
   it("auto selection prefers opencode when multiple valid sources are present", () => {

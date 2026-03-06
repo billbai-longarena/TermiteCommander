@@ -49,6 +49,16 @@ export interface LauncherConfig {
   defaultWorkerModel: string;
 }
 
+export interface RuntimeSmokeProbe {
+  runtime: WorkerRuntime;
+  model: string | null;
+  ok: boolean;
+  skipped: boolean;
+  detail: string;
+  stdout: string;
+  stderr: string;
+}
+
 export class OpenCodeLauncher {
   private config: LauncherConfig;
   private workers: Map<string, OpenCodeWorker> = new Map();
@@ -208,6 +218,128 @@ export class OpenCodeLauncher {
     }
 
     return { required, available, missing };
+  }
+
+  getRuntimeModelTargets(): Array<{ runtime: WorkerRuntime; model: string | null }> {
+    const targets = new Map<string, { runtime: WorkerRuntime; model: string | null }>();
+    for (const spec of this.config.workerSpecs) {
+      const runtime = spec.cli;
+      const model = (spec.model ?? this.config.defaultWorkerModel)?.trim() || null;
+      const key = `${runtime}|${model ?? "<none>"}`;
+      if (!targets.has(key)) {
+        targets.set(key, { runtime, model });
+      }
+    }
+    if (targets.size === 0) {
+      const runtime = this.config.defaultWorkerCli;
+      const model = this.config.defaultWorkerModel?.trim() || null;
+      targets.set(`${runtime}|${model ?? "<none>"}`, { runtime, model });
+    }
+    return [...targets.values()];
+  }
+
+  async smokeTestRuntimeModel(
+    runtime: WorkerRuntime,
+    model: string | null,
+    timeoutMs = 30_000,
+  ): Promise<RuntimeSmokeProbe> {
+    const prompt = "Reply with exactly: OK";
+    const workspace = resolve(this.config.colonyRoot);
+
+    const runExecFile = async (
+      command: string,
+      args: string[],
+      skipped = false,
+      skippedDetail?: string,
+    ): Promise<RuntimeSmokeProbe> => {
+      if (skipped) {
+        return {
+          runtime,
+          model,
+          ok: true,
+          skipped: true,
+          detail: skippedDetail ?? "Skipped runtime smoke test.",
+          stdout: "",
+          stderr: "",
+        };
+      }
+      try {
+        const result = await execFileAsync(command, args, { timeout: timeoutMs }) as
+          | { stdout?: string | Buffer; stderr?: string | Buffer }
+          | string
+          | Buffer;
+        const stdout =
+          typeof result === "string" || Buffer.isBuffer(result)
+            ? result
+            : (result.stdout ?? "");
+        const stderr =
+          typeof result === "string" || Buffer.isBuffer(result)
+            ? ""
+            : (result.stderr ?? "");
+        return {
+          runtime,
+          model,
+          ok: true,
+          skipped: false,
+          detail: "Smoke test passed.",
+          stdout: stdout.toString().trim(),
+          stderr: stderr.toString().trim(),
+        };
+      } catch (err: any) {
+        return {
+          runtime,
+          model,
+          ok: false,
+          skipped: false,
+          detail: err?.message ?? "Smoke test failed.",
+          stdout: (err?.stdout ?? "").toString().trim(),
+          stderr: (err?.stderr ?? "").toString().trim(),
+        };
+      }
+    };
+
+    if (runtime === "opencode") {
+      const args = ["run", prompt, "--format", "json", "--dir", workspace];
+      if (model) args.push("--model", model);
+      return runExecFile("opencode", args);
+    }
+
+    if (runtime === "claude") {
+      const args = [
+        "-p",
+        prompt,
+        "--output-format",
+        "stream-json",
+        "--permission-mode",
+        "bypassPermissions",
+        "--session-id",
+        randomUUID(),
+      ];
+      if (model) args.push("--model", model);
+      return runExecFile("claude", args);
+    }
+
+    if (runtime === "codex") {
+      const args = ["exec", prompt, "--json", "--full-auto", "--skip-git-repo-check", "-C", workspace];
+      if (model) args.push("-m", model);
+      return runExecFile("codex", args);
+    }
+
+    return runExecFile(
+      "openclaw",
+      [],
+      true,
+      "Skipped: OpenClaw smoke test requires route/session context that is not stable in doctor preflight.",
+    );
+  }
+
+  async smokeTestConfiguredWorkers(timeoutMs = 30_000): Promise<RuntimeSmokeProbe[]> {
+    const targets = this.getRuntimeModelTargets();
+    const probes: RuntimeSmokeProbe[] = [];
+    for (const target of targets) {
+      probes.push(await this.smokeTestRuntimeModel(target.runtime, target.model, timeoutMs));
+    }
+    return probes;
   }
 
   private async runWorker(worker: OpenCodeWorker, prompt: string): Promise<void> {

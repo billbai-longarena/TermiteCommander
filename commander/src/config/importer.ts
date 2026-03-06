@@ -382,6 +382,10 @@ function importFromClaude(colonyRoot: string): ExternalImportResult {
     level: "info",
     message: `Imported commander.model from Claude config ${path}.`,
   });
+  diagnostics.push({
+    level: "info",
+    message: "Inferred worker defaults from Claude source (default_worker_cli=claude).",
+  });
   return {
     source: "claude",
     found: true,
@@ -390,6 +394,9 @@ function importFromClaude(colonyRoot: string): ExternalImportResult {
     recommended: {
       commander: {
         model,
+        default_worker_cli: "claude",
+        default_worker_model: model,
+        workers: [{ cli: "claude", model, count: 1 }],
       },
     },
     diagnostics,
@@ -471,6 +478,10 @@ function importFromCodex(colonyRoot: string): ExternalImportResult {
     level: "info",
     message: `Imported commander.model from Codex config ${path}.`,
   });
+  diagnostics.push({
+    level: "info",
+    message: "Inferred worker defaults from Codex source (default_worker_cli=codex).",
+  });
   return {
     source: "codex",
     found: true,
@@ -479,6 +490,9 @@ function importFromCodex(colonyRoot: string): ExternalImportResult {
     recommended: {
       commander: {
         model,
+        default_worker_cli: "codex",
+        default_worker_model: model,
+        workers: [{ cli: "codex", model, count: 1 }],
       },
     },
     diagnostics,

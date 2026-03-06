@@ -5,9 +5,9 @@ import { Pipeline, type PipelineConfig } from "./engine/pipeline.js";
 import { SignalBridge } from "./colony/signal-bridge.js";
 import { resolve, join } from "node:path";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { readTermiteConfigWithPath, resolveModels } from "./config/model-resolver.js";
+import { readTermiteConfigWithPath, resolveModels, type ResolvedModels } from "./config/model-resolver.js";
 import { ensureWorkspaceBoundary } from "./colony/workspace-boundary.js";
-import { checkProviderCredentials } from "./llm/provider.js";
+import { checkProviderCredentials, callLLM, configFromResolved } from "./llm/provider.js";
 import {
   getTermiteConfigPath,
   importExternalConfig,
@@ -15,6 +15,8 @@ import {
   writeTermiteConfig,
   type ExternalConfigSource,
 } from "./config/importer.js";
+import { OpenCodeLauncher, type RuntimeSmokeProbe } from "./colony/opencode-launcher.js";
+import { ensureTermiteProtocolInstalled } from "./colony/protocol-installer.js";
 
 function detectPlatform(): "opencode" | "claude-code" | "unknown" {
   if (process.env.CLAUDE_PROJECT_DIR) return "claude-code";
@@ -63,27 +65,370 @@ function getCredentialStatus(models: ReturnType<typeof resolveModels>): {
   };
 }
 
+function isProcessAlive(pid: unknown): boolean {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    if (err?.code === "EPERM") return true;
+    return false;
+  }
+}
+
+function getHeartbeatAgeSeconds(statusFileData: unknown): number | null {
+  if (!statusFileData || typeof statusFileData !== "object") return null;
+  const updatedAt = (statusFileData as Record<string, unknown>).updatedAt;
+  if (typeof updatedAt !== "string" || !updatedAt.trim()) return null;
+  const updatedMs = Date.parse(updatedAt);
+  if (Number.isNaN(updatedMs)) return null;
+  const ageSec = Math.floor((Date.now() - updatedMs) / 1000);
+  return ageSec >= 0 ? ageSec : 0;
+}
+
+function formatRuntimeProbeLabel(probe: RuntimeSmokeProbe): string {
+  const model = probe.model ?? "<default>";
+  const mode = probe.skipped ? "SKIP" : probe.ok ? "OK" : "FAIL";
+  return `${probe.runtime}@${model}: ${mode} (${probe.detail})`;
+}
+
+function createLauncher(colonyRoot: string, resolved: ReturnType<typeof resolveModels>): OpenCodeLauncher {
+  return new OpenCodeLauncher({
+    colonyRoot,
+    skillSourceDir: resolve(import.meta.dirname ?? ".", "../skills/termite"),
+    workerSpecs: resolved.workers,
+    defaultWorkerCli: resolved.defaultWorkerCli,
+    defaultWorkerModel: resolved.defaultWorkerModel,
+  });
+}
+
+async function runWorkerRuntimePreflight(
+  colonyRoot: string,
+  resolved: ResolvedModels,
+  timeoutMs: number,
+): Promise<{
+  required: string[];
+  available: string[];
+  missing: string[];
+  probes: RuntimeSmokeProbe[];
+}> {
+  const launcher = createLauncher(colonyRoot, resolved);
+  const runtimeCheck = await launcher.checkRequiredRuntimes();
+  const probes =
+    runtimeCheck.missing.length === 0
+      ? await launcher.smokeTestConfiguredWorkers(timeoutMs)
+      : [];
+
+  return {
+    required: runtimeCheck.required,
+    available: runtimeCheck.available,
+    missing: runtimeCheck.missing,
+    probes,
+  };
+}
+
+async function probeCommanderModel(
+  resolved: ResolvedModels,
+  timeoutMs: number,
+): Promise<{ enabled: boolean; ok: boolean; detail: string }> {
+  if (!resolved.commanderModel) {
+    return {
+      enabled: false,
+      ok: false,
+      detail: "Skipped because commander model is missing.",
+    };
+  }
+
+  const llmConfig = configFromResolved(resolved);
+  try {
+    const response = await Promise.race([
+      callLLM("Reply with exactly: OK", llmConfig),
+      new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error(`timeout after ${Math.floor(timeoutMs / 1000)}s`)), timeoutMs),
+      ),
+    ]);
+    return {
+      enabled: true,
+      ok: true,
+      detail: `Probe succeeded (${llmConfig.provider}/${llmConfig.model}): ${response.slice(0, 80)}`,
+    };
+  } catch (err: any) {
+    return {
+      enabled: true,
+      ok: false,
+      detail: `Probe failed (${llmConfig.provider}/${llmConfig.model}): ${err?.message ?? "unknown error"}`,
+    };
+  }
+}
+
 program
   .name("termite-commander")
   .description("Termite Commander — autonomous orchestration engine")
   .version(pkg.version);
 
+program.addHelpText(
+  "after",
+  `
+Quick Start (new project):
+  1) termite-commander init --colony .
+  2) termite-commander plan "<objective>" --plan .termite/worker/PLAN.md --colony . --run
+  3) termite-commander status --colony .
+
+Minimal Runtime Notes:
+  - No args: opens read-only TUI dashboard.
+  - commander.model is required before planning.
+  - plan --run auto-installs Termite Protocol if missing.
+  - Install at least one worker CLI used by your config: opencode/claude/codex/openclaw.
+`
+);
+
+program
+  .command("init")
+  .description("One-shot onboarding: protocol + skills + config bootstrap + doctor")
+  .option("-c, --colony <path>", "Project root directory", process.cwd())
+  .option("--from <source>", "Import source: auto | opencode | claude | codex", "auto")
+  .option("--force", "Override existing termite.config.json values during bootstrap", false)
+  .option("--runtime-timeout <sec>", "Runtime/model smoke timeout per probe (seconds)", "30")
+  .option("--dashboard <mode>", "Dashboard mode: auto | tui | watch | off", "auto")
+  .option("--json", "Output as JSON", false)
+  .addHelpText(
+    "after",
+    `
+Default flow:
+  1) Ensure Termite Protocol is installed (creates AGENTS.md / CLAUDE.md when missing)
+  2) Install Commander skills/plugins into the project
+  3) Bootstrap model config from opencode/claude/codex config
+  4) Run config + credential + runtime/model preflight checks
+  5) Optionally start dashboard monitor (auto mode only in agent sessions)
+
+Examples:
+  termite-commander init --colony .
+  termite-commander init --colony . --from codex --dashboard off
+`
+  )
+  .action(async (opts: {
+    colony: string;
+    from: string;
+    force: boolean;
+    runtimeTimeout: string;
+    dashboard: string;
+    json: boolean;
+  }) => {
+    try {
+      const source = parseImportSource(opts.from);
+      const timeoutSecRaw = parseInt(opts.runtimeTimeout, 10);
+      const timeoutMs = Number.isNaN(timeoutSecRaw) || timeoutSecRaw <= 0 ? 30_000 : timeoutSecRaw * 1000;
+      const dashboardMode = (opts.dashboard ?? "auto").toLowerCase().trim();
+      if (!["auto", "tui", "watch", "off"].includes(dashboardMode)) {
+        throw new Error("Invalid --dashboard mode. Use: auto | tui | watch | off");
+      }
+
+      const skillSourceDir = resolve(import.meta.dirname ?? ".", "../skills/termite");
+
+      const protocolResult = ensureTermiteProtocolInstalled({
+        colonyRoot: opts.colony,
+        skillSourceDir,
+        logger: (message) => {
+          if (!opts.json) console.log(message);
+        },
+      });
+
+      const resolvedForInstall = resolveModels(opts.colony);
+      const launcher = createLauncher(opts.colony, resolvedForInstall);
+      launcher.installSkills();
+      const setup = ensureWorkspaceBoundary(opts.colony);
+      if (!opts.json && (setup.createdFiles.length > 0 || setup.createdDirs.length > 0 || setup.gitignoreUpdated)) {
+        console.log(
+          `[launcher] Workspace boundary initialized: dirs=${setup.createdDirs.length} files=${setup.createdFiles.length} gitignore=${setup.gitignoreUpdated ? "updated" : "ok"}`,
+        );
+      }
+
+      const selection = importExternalConfig(opts.colony, source);
+      const selected = selection.selected;
+      const existingLookup = readTermiteConfigWithPath(opts.colony);
+      const targetPath = getTermiteConfigPath(opts.colony);
+      let mergeResult: ReturnType<typeof mergeImportedConfig> | null = null;
+      let applied = false;
+
+      if (selected?.recommended) {
+        mergeResult = mergeImportedConfig(existingLookup.config, selected.recommended, opts.force);
+        if (mergeResult.changes.length > 0) {
+          writeTermiteConfig(targetPath, mergeResult.merged);
+          applied = true;
+        }
+      }
+
+      const resolved = resolveModels(opts.colony);
+      const credentials = getCredentialStatus(resolved);
+      const configOk = resolved.issues.errors.length === 0;
+      const credentialsOk = !credentials.enabled || credentials.ok;
+      const commanderProbe = await probeCommanderModel(resolved, timeoutMs);
+      const runtime = await runWorkerRuntimePreflight(opts.colony, resolved, timeoutMs);
+      const failedProbes = runtime.probes.filter((probe) => !probe.ok && !probe.skipped);
+      const runtimeOk = runtime.missing.length === 0 && failedProbes.length === 0;
+      const ok = configOk && credentialsOk && commanderProbe.ok && runtimeOk;
+
+      const report = {
+        ok,
+        colony: opts.colony,
+        from: source,
+        protocol: protocolResult,
+        skillsInstalled: true,
+        workspaceBoundary: setup,
+        bootstrap: {
+          selected,
+          candidates: selection.candidates,
+          targetPath,
+          applied,
+          merge: mergeResult,
+        },
+        doctor: {
+          config: { ok: configOk, issues: resolved.issues, resolved },
+          credentials: { ...credentials, ok: credentialsOk },
+          commanderProbe,
+          runtime: {
+            required: runtime.required,
+            available: runtime.available,
+            missing: runtime.missing,
+            probes: runtime.probes,
+          },
+        },
+      };
+
+      if (opts.json) {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        console.log("\n=== INIT SUMMARY ===");
+        console.log(`Protocol: ${protocolResult.installed ? `INSTALLED (${protocolResult.source})` : "ALREADY INSTALLED"}`);
+        console.log("Skills: INSTALLED");
+        console.log(`Config bootstrap source: ${source}`);
+        if (selected) {
+          console.log(
+            `  Selected: ${selected.source} (confidence ${(selected.confidence * 100).toFixed(1)}%)` +
+              `${selected.path ? ` from ${selected.path}` : ""}`,
+          );
+        } else {
+          console.log("  Selected: none (kept existing config)");
+        }
+        if (mergeResult) {
+          console.log(
+            applied
+              ? `  Applied: yes -> ${targetPath}`
+              : "  Applied: no (existing config already satisfied merge policy)",
+          );
+        } else {
+          console.log("  Applied: no (no valid source selected)");
+        }
+        console.log(`Doctor config: ${configOk ? "OK" : "FAIL"}`);
+        console.log(`Doctor credentials: ${credentialsOk ? "OK" : "FAIL"} (${credentials.detail})`);
+        console.log(`Doctor commander probe: ${commanderProbe.ok ? "OK" : "FAIL"} (${commanderProbe.detail})`);
+        console.log(`Doctor runtime binaries: ${runtime.missing.length === 0 ? "OK" : `FAIL (${runtime.missing.join(", ")})`}`);
+        if (runtime.probes.length > 0) {
+          console.log("Doctor runtime probes:");
+          for (const probe of runtime.probes) {
+            console.log(`  - ${formatRuntimeProbeLabel(probe)}`);
+          }
+        }
+        if (resolved.issues.errors.length > 0) {
+          console.log("Model config errors:");
+          for (const err of resolved.issues.errors) {
+            console.log(`  - ${err}`);
+          }
+        }
+        if (resolved.issues.warnings.length > 0) {
+          console.log("Model config warnings:");
+          for (const warn of resolved.issues.warnings) {
+            console.log(`  - ${warn}`);
+          }
+        }
+      }
+
+      if (!ok) {
+        if (!opts.json) {
+          console.log("\nSuggested fix flow:");
+          console.log("  1) termite-commander config bootstrap --from auto --colony . --force");
+          console.log("  2) termite-commander doctor --config --runtime --colony .");
+          console.log("  3) Fix failing runtime/model probe from the doctor output.");
+        }
+        process.exit(1);
+      }
+
+      if (!opts.json) {
+        console.log("\nInit complete. Next:");
+        console.log('  termite-commander plan "<objective>" --plan .termite/worker/PLAN.md --colony . --run');
+      }
+
+      const autoDashboard = dashboardMode === "auto";
+      const agentSession =
+        Boolean(process.env.CODEX_CLI) ||
+        Boolean(process.env.CLAUDE_PROJECT_DIR) ||
+        Boolean(process.env.OPENCODE_SESSION);
+      const shouldStartTui =
+        dashboardMode === "tui" ||
+        (autoDashboard && agentSession && process.stdout.isTTY && process.stdin.isTTY);
+      const shouldStartWatch =
+        dashboardMode === "watch" ||
+        (autoDashboard && agentSession && !shouldStartTui);
+
+      if (shouldStartTui) {
+        if (!opts.json) {
+          console.log("\nStarting TUI dashboard (Ctrl+C to exit)...");
+        }
+        const { startTUI } = await import("./tui/index.js");
+        await startTUI(opts.colony);
+        return;
+      }
+
+      if (shouldStartWatch) {
+        if (!opts.json) {
+          console.log("\nStarting watch monitor (Ctrl+C to exit)...");
+        }
+        const bridge = new SignalBridge(opts.colony);
+        const tick = async () => {
+          const status = await bridge.status();
+          const stall = await bridge.checkStall(5);
+          process.stdout.write(
+            `\r[${new Date().toISOString()}] total=${status.total} open=${status.open} claimed=${status.claimed} done=${status.done} stall=${stall.stalled}   `,
+          );
+        };
+        await tick();
+        setInterval(tick, 5000);
+      }
+    } catch (err: any) {
+      console.error(`[init] failed: ${err?.message ?? "unknown error"}`);
+      process.exit(1);
+    }
+  });
+
 program
   .command("install")
   .description("Install Commander skills into current project (Claude Code plugin + OpenCode skill)")
   .option("-c, --colony <path>", "Project root directory", process.cwd())
+  .addHelpText(
+    "after",
+    `
+What gets installed:
+  - Termite Protocol (if missing): scripts/, signals/, AGENTS.md / CLAUDE.md
+  - .opencode/skill/termite/ (worker protocol skills)
+  - .opencode/skill/commander/ (OpenCode commander skill)
+  - .claude/plugins/termite-commander/ (Claude Code plugin)
+  - .termite/{human,worker}/ workspace boundary files
+
+Example:
+  termite-commander install --colony .
+`
+  )
   .action(async (opts: { colony: string }) => {
-    const { OpenCodeLauncher } = await import("./colony/opencode-launcher.js");
+    const skillSourceDir = resolve(import.meta.dirname ?? ".", "../skills/termite");
     const resolved = resolveModels(opts.colony);
-    const launcher = new OpenCodeLauncher({
-      colonyRoot: opts.colony,
-      skillSourceDir: resolve(import.meta.dirname ?? ".", "../skills/termite"),
-      workerSpecs: resolved.workers,
-      defaultWorkerCli: resolved.defaultWorkerCli,
-      defaultWorkerModel: resolved.defaultWorkerModel,
-    });
+    const launcher = createLauncher(opts.colony, resolved);
 
     try {
+      ensureTermiteProtocolInstalled({
+        colonyRoot: opts.colony,
+        skillSourceDir,
+        logger: (message) => console.log(message.replace("[commander]", "[launcher]")),
+      });
       launcher.installSkills();
       const setup = ensureWorkspaceBoundary(opts.colony);
       if (setup.createdFiles.length > 0 || setup.createdDirs.length > 0 || setup.gitignoreUpdated) {
@@ -132,6 +477,10 @@ program
     console.log("  Claude Code: /commander <objective>");
     console.log("  OpenCode:    /commander <objective>");
     console.log("\nTrigger phrases: /commander, 让蚁群干活, 让白蚁施工, deploy termites");
+    console.log("\nRecommended next steps:");
+    console.log("  1) termite-commander config bootstrap --from auto --colony .");
+    console.log("  2) termite-commander doctor --config --runtime --colony .");
+    console.log('  3) termite-commander plan "<objective>" --plan .termite/worker/PLAN.md --colony . --run');
   });
 
 program
@@ -142,7 +491,30 @@ program
   .option("--context <text>", "Direct text context for decomposition")
   .option("--dispatch", "Dispatch signals immediately after planning", false)
   .option("--run", "Plan, dispatch, and start heartbeats", false)
-  .action(async (objective: string, opts: { colony: string; plan?: string; context?: string; dispatch: boolean; run: boolean }) => {
+  .option("--skip-runtime-smoke", "Skip worker runtime/model smoke tests before --run", false)
+  .option("--runtime-timeout <sec>", "Runtime/model smoke timeout per probe (seconds)", "30")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  termite-commander plan "Build OAuth2 auth" --plan .termite/worker/PLAN.md --colony . --run
+  termite-commander plan "Fix flaky CI tests" --context "root cause + fix strategy" --colony . --dispatch
+
+Execution modes:
+  --dispatch   plan + dispatch only
+  --run        plan + dispatch + protocol check/install + worker fleet + heartbeats
+  (default preflight includes runtime/model smoke; disable with --skip-runtime-smoke)
+`
+  )
+  .action(async (objective: string, opts: {
+    colony: string;
+    plan?: string;
+    context?: string;
+    dispatch: boolean;
+    run: boolean;
+    skipRuntimeSmoke: boolean;
+    runtimeTimeout: string;
+  }) => {
     try {
       const defaultWorkerPlanPath = join(opts.colony, ".termite", "worker", "PLAN.md");
       const planFile =
@@ -172,7 +544,13 @@ program
       if (opts.run) {
         console.log("\n[commander] Starting colony execution...");
         console.log("[commander] Open another terminal and run 'termite-commander' for the live dashboard.");
-        await pipeline.runWithHeartbeats(plan);
+        const timeoutSecRaw = parseInt(opts.runtimeTimeout, 10);
+        const runtimeSmokeTimeoutMs =
+          Number.isNaN(timeoutSecRaw) || timeoutSecRaw <= 0 ? 30_000 : timeoutSecRaw * 1000;
+        await pipeline.runWithHeartbeats(plan, {
+          skipRuntimeSmoke: opts.skipRuntimeSmoke,
+          runtimeSmokeTimeoutMs,
+        });
       } else if (opts.dispatch) {
         await pipeline.dispatch(plan);
         console.log("\nSignals dispatched. Run 'termite-commander watch' to monitor.");
@@ -190,6 +568,14 @@ program
   .description("Show colony status")
   .option("-c, --colony <path>", "Colony root directory", process.cwd())
   .option("--json", "Output as JSON", false)
+  .addHelpText(
+    "after",
+    `
+Examples:
+  termite-commander status --colony .
+  termite-commander status --colony . --json
+`
+  )
   .action(async (opts: { colony: string; json: boolean }) => {
     const bridge = new SignalBridge(opts.colony);
     const protocolInstalled = bridge.hasScripts();
@@ -212,6 +598,11 @@ program
       try { statusFileData = JSON.parse(readFileSync(statusFilePath, "utf-8")); } catch {}
     }
 
+    const pidAlive = lockData ? isProcessAlive(lockData.pid) : false;
+    const staleLock = Boolean(lockData && !pidAlive);
+    const heartbeatAgeSec = getHeartbeatAgeSeconds(statusFileData);
+    const heartbeatStale = heartbeatAgeSec !== null && heartbeatAgeSec > 120;
+
     if (opts.json) {
       console.log(
         JSON.stringify(
@@ -220,6 +611,13 @@ program
             colony: status,
             commander: lockData,
             status: statusFileData,
+            runtimeHealth: {
+              lockPresent: Boolean(lockData),
+              pidAlive,
+              staleLock,
+              heartbeatAgeSec,
+              heartbeatStale,
+            },
             models,
           },
           null,
@@ -227,8 +625,16 @@ program
         ),
       );
     } else {
-      const running = lockData ? `YES (PID ${lockData.pid})` : "NO";
+      let running = "NO";
+      if (lockData && pidAlive) {
+        running = `YES (PID ${lockData.pid})`;
+      } else if (lockData && !pidAlive) {
+        running = `STALE (lock PID ${lockData.pid} not running)`;
+      }
       console.log(`Commander: ${running}`);
+      if (staleLock) {
+        console.log("  Tip: run 'termite-commander stop --colony .' to clean stale lock/status files.");
+      }
       console.log(`Protocol: ${protocolInstalled ? "INSTALLED" : "MISSING"}`);
       if (!protocolInstalled) {
         console.log("  Tip: run 'termite-commander plan <objective> --run' to auto-install protocol.");
@@ -261,6 +667,11 @@ program
       }
       if (statusFileData) {
         console.log(`Workers: active=${statusFileData.heartbeat?.activeWorkers ?? 0} running=${statusFileData.heartbeat?.runningWorkers ?? 0}`);
+        if (heartbeatAgeSec !== null) {
+          console.log(`Heartbeat: ${heartbeatStale ? "STALE" : "OK"} (${heartbeatAgeSec}s ago)`);
+        } else {
+          console.log("Heartbeat: unknown");
+        }
         if (statusFileData.models) {
           console.log(
             `Models: commander=${statusFileData.models.commander}` +
@@ -285,7 +696,18 @@ program
 
 const configCommand = program
   .command("config")
-  .description("Configuration utilities");
+  .description("Configuration utilities")
+  .addHelpText(
+    "after",
+    `
+Recommended init flow:
+  termite-commander init --colony .
+
+Manual flow:
+  termite-commander config bootstrap --from auto --colony .
+  termite-commander doctor --config --runtime --colony .
+`
+  );
 
 configCommand
   .command("import")
@@ -295,6 +717,14 @@ configCommand
   .option("--apply", "Write merged result to termite.config.json", false)
   .option("--force", "Override existing termite.config.json values", false)
   .option("--json", "Output as JSON", false)
+  .addHelpText(
+    "after",
+    `
+Examples:
+  termite-commander config import --from auto --colony .
+  termite-commander config import --from codex --apply --colony .
+`
+  )
   .action((opts: { colony: string; from: string; apply: boolean; force: boolean; json: boolean }) => {
     try {
       const source = parseImportSource(opts.from);
@@ -432,6 +862,16 @@ configCommand
   .option("--from <source>", "Import source: auto | opencode | claude | codex", "auto")
   .option("--force", "Override existing termite.config.json values", false)
   .option("--json", "Output as JSON", false)
+  .addHelpText(
+    "after",
+    `
+One-shot (recommended for fresh setup):
+  termite-commander config bootstrap --from auto --colony .
+
+Then validate:
+  termite-commander doctor --config --runtime --colony .
+`
+  )
   .action((opts: { colony: string; from: string; force: boolean; json: boolean }) => {
     try {
       const source = parseImportSource(opts.from);
@@ -563,24 +1003,59 @@ program
   .description("Run diagnostics for commander runtime and config")
   .option("-c, --colony <path>", "Colony root directory", process.cwd())
   .option("--config", "Run model configuration diagnostics", false)
+  .option("--runtime", "Run worker runtime/model smoke diagnostics", false)
+  .option("--runtime-timeout <sec>", "Runtime/model smoke timeout per probe (seconds)", "30")
   .option("--json", "Output as JSON", false)
-  .action((opts: { colony: string; config: boolean; json: boolean }) => {
-    const checkConfig = true;
-    if (!opts.config && !opts.json) {
-      console.log("[doctor] Running config diagnostics (currently the only doctor check).");
-    }
-    const models = resolveModels(opts.colony);
-    const configOk = !checkConfig || models.issues.errors.length === 0;
-    const credentials = getCredentialStatus(models);
-    const credentialsOk = !credentials.enabled || credentials.ok;
-    const ok = configOk && credentialsOk;
+  .addHelpText(
+    "after",
+    `
+Use this before plan --run to catch missing model/credentials/runtime issues.
 
+Example:
+  termite-commander doctor --config --runtime --colony .
+`
+  )
+  .action(async (opts: {
+    colony: string;
+    config: boolean;
+    runtime: boolean;
+    runtimeTimeout: string;
+    json: boolean;
+  }) => {
+    const runConfig = opts.config || !opts.runtime;
+    const runRuntime = opts.runtime;
+    const timeoutSecRaw = parseInt(opts.runtimeTimeout, 10);
+    const timeoutMs = Number.isNaN(timeoutSecRaw) || timeoutSecRaw <= 0 ? 30_000 : timeoutSecRaw * 1000;
+
+    const models = resolveModels(opts.colony);
+    const configOk = !runConfig || models.issues.errors.length === 0;
+    const credentials = getCredentialStatus(models);
+    const credentialsOk = !runConfig || !credentials.enabled || credentials.ok;
+
+    let commanderProbe: { enabled: boolean; ok: boolean; detail: string } = {
+      enabled: false,
+      ok: true,
+      detail: "Skipped (runtime check disabled).",
+    };
+    let runtimeResult: Awaited<ReturnType<typeof runWorkerRuntimePreflight>> | null = null;
+    let runtimeOk = true;
+    if (runRuntime) {
+      commanderProbe = await probeCommanderModel(models, timeoutMs);
+      runtimeResult = await runWorkerRuntimePreflight(opts.colony, models, timeoutMs);
+      const failedProbes = runtimeResult.probes.filter((probe) => !probe.ok && !probe.skipped);
+      runtimeOk =
+        runtimeResult.missing.length === 0 &&
+        failedProbes.length === 0 &&
+        commanderProbe.ok;
+    }
+
+    const ok = configOk && credentialsOk && runtimeOk;
     const report = {
       colony: opts.colony,
       ok,
       checks: {
         config: {
-          enabled: checkConfig,
+          enabled: runConfig,
           ok: configOk,
           issues: models.issues,
           resolved: {
@@ -593,11 +1068,20 @@ program
           },
         },
         credentials: {
-          enabled: credentials.enabled,
+          enabled: runConfig && credentials.enabled,
           ok: credentialsOk,
           provider: credentials.provider,
           detail: credentials.detail,
           missing: credentials.missing,
+        },
+        runtime: {
+          enabled: runRuntime,
+          ok: runtimeOk,
+          commanderProbe,
+          required: runtimeResult?.required ?? [],
+          available: runtimeResult?.available ?? [],
+          missing: runtimeResult?.missing ?? [],
+          probes: runtimeResult?.probes ?? [],
         },
       },
     };
@@ -607,29 +1091,46 @@ program
     } else {
       console.log(`Doctor: ${ok ? "OK" : "FAIL"}`);
       console.log(`  colony: ${opts.colony}`);
-      console.log(`  config: ${configOk ? "OK" : "FAIL"}`);
-      if (credentials.enabled) {
-        console.log(`  credentials: ${credentialsOk ? "OK" : "FAIL"} (${credentials.detail})`);
+      if (runConfig) {
+        console.log(`  config: ${configOk ? "OK" : "FAIL"}`);
+        if (credentials.enabled) {
+          console.log(`  credentials: ${credentialsOk ? "OK" : "FAIL"} (${credentials.detail})`);
+        } else {
+          console.log(`  credentials: SKIPPED (${credentials.detail})`);
+        }
+        console.log(
+          `  resolved commander=${models.commanderModel || "<missing>"} provider=${models.commanderProvider}` +
+            ` defaultWorkerCli=${models.defaultWorkerCli} defaultWorkerModel=${models.defaultWorkerModel}`,
+        );
       } else {
-        console.log(`  credentials: SKIPPED (${credentials.detail})`);
+        console.log("  config: SKIPPED");
       }
-      console.log(
-        `  resolved commander=${models.commanderModel || "<missing>"} provider=${models.commanderProvider}` +
-          ` defaultWorkerCli=${models.defaultWorkerCli} defaultWorkerModel=${models.defaultWorkerModel}`,
-      );
-      if (models.issues.errors.length > 0) {
+
+      if (runRuntime && runtimeResult) {
+        console.log(
+          `  runtime binaries: ${runtimeResult.missing.length === 0 ? "OK" : `FAIL (${runtimeResult.missing.join(", ")})`}`,
+        );
+        console.log(`  commander probe: ${commanderProbe.ok ? "OK" : "FAIL"} (${commanderProbe.detail})`);
+        for (const probe of runtimeResult.probes) {
+          console.log(`  runtime probe: ${formatRuntimeProbeLabel(probe)}`);
+        }
+      } else {
+        console.log("  runtime: SKIPPED (use --runtime)");
+      }
+
+      if (runConfig && models.issues.errors.length > 0) {
         console.log("  errors:");
         for (const error of models.issues.errors) {
           console.log(`    - ${error}`);
         }
       }
-      if (models.issues.warnings.length > 0) {
+      if (runConfig && models.issues.warnings.length > 0) {
         console.log("  warnings:");
         for (const warning of models.issues.warnings) {
           console.log(`    - ${warning}`);
         }
       }
-      if (credentials.enabled && !credentials.ok && credentials.missing.length > 0) {
+      if (runConfig && credentials.enabled && !credentials.ok && credentials.missing.length > 0) {
         console.log("  missing env vars:");
         for (const key of credentials.missing) {
           console.log(`    - ${key}`);
@@ -637,9 +1138,9 @@ program
       }
       if (!ok) {
         console.log("Suggested fix flow:");
-        console.log("  1) termite-commander config bootstrap --from auto");
+        console.log("  1) termite-commander config bootstrap --from auto --colony .");
         console.log("  2) Export required API credentials for the selected provider");
-        console.log("  3) termite-commander doctor --config");
+        console.log("  3) termite-commander doctor --config --runtime --colony .");
       }
     }
 
@@ -652,6 +1153,13 @@ program
   .command("resume")
   .description("Resume from a halted state")
   .option("-c, --colony <path>", "Colony root directory", process.cwd())
+  .addHelpText(
+    "after",
+    `
+Example:
+  termite-commander resume --colony .
+`
+  )
   .action(async (opts: { colony: string }) => {
     const { existsSync, readFileSync, unlinkSync } = await import("node:fs");
     const { join } = await import("node:path");
@@ -674,6 +1182,13 @@ program
   .description("Watch colony status in real-time")
   .option("-c, --colony <path>", "Colony root directory", process.cwd())
   .option("-i, --interval <ms>", "Refresh interval in ms", "5000")
+  .addHelpText(
+    "after",
+    `
+Example:
+  termite-commander watch --colony . --interval 3000
+`
+  )
   .action(async (opts: { colony: string; interval: string }) => {
     const bridge = new SignalBridge(opts.colony);
     const interval = parseInt(opts.interval, 10);
@@ -694,41 +1209,77 @@ program
   .command("stop")
   .description("Stop a running Commander process")
   .option("-c, --colony <path>", "Colony root directory", process.cwd())
-  .action(async (opts: { colony: string }) => {
+  .option("--force", "Force cleanup lock/status and try killing orphan commander pid", false)
+  .addHelpText(
+    "after",
+    `
+Example:
+  termite-commander stop --colony .
+  termite-commander stop --colony . --force
+`
+  )
+  .action(async (opts: { colony: string; force: boolean }) => {
     const lockPath = join(opts.colony, "commander.lock");
+    const statusFilePath = join(opts.colony, ".commander-status.json");
+
+    let lockData: { pid: number; startedAt: string; objective: string } | null = null;
+    let statusPid: number | null = null;
+
+    if (existsSync(statusFilePath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(statusFilePath, "utf-8"));
+        if (typeof parsed?.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0) {
+          statusPid = parsed.pid;
+        }
+      } catch {}
+    }
 
     if (!existsSync(lockPath)) {
-      console.log("No commander.lock found. Commander is not running.");
-      return;
-    }
-
-    let lockData: { pid: number; startedAt: string; objective: string };
-    try {
-      lockData = JSON.parse(readFileSync(lockPath, "utf-8"));
-    } catch {
-      console.error("Failed to parse commander.lock.");
-      return;
-    }
-
-    console.log(`Stopping Commander (PID ${lockData.pid})...`);
-    try {
-      process.kill(lockData.pid, "SIGTERM");
-      console.log("SIGTERM sent.");
-    } catch (err: any) {
-      if (err.code === "ESRCH") {
-        console.log("Process not found (already exited).");
-      } else {
-        console.error(`Failed to kill process: ${err.message}`);
+      if (!opts.force) {
+        console.log("No commander.lock found. Commander is not running.");
+        return;
       }
+      console.log("No commander.lock found. --force enabled: cleaning stale status files.");
+    } else {
+      try {
+        lockData = JSON.parse(readFileSync(lockPath, "utf-8"));
+      } catch {
+        if (!opts.force) {
+          console.error("Failed to parse commander.lock.");
+          return;
+        }
+        console.warn("Failed to parse commander.lock. --force enabled: continuing cleanup.");
+      }
+    }
+
+    if (lockData?.pid) {
+      console.log(`Stopping Commander (PID ${lockData.pid})...`);
+      try {
+        process.kill(lockData.pid, "SIGTERM");
+        console.log("SIGTERM sent.");
+      } catch (err: any) {
+        if (err.code === "ESRCH") {
+          console.log("Process not found (already exited).");
+        } else {
+          console.error(`Failed to kill process: ${err.message}`);
+        }
+      }
+    }
+
+    if (opts.force && statusPid && (!lockData || statusPid !== lockData.pid)) {
+      try {
+        process.kill(statusPid, "SIGTERM");
+        console.log(`Force cleanup: sent SIGTERM to orphan status PID ${statusPid}.`);
+      } catch {}
     }
 
     // Clean up lock file and stale status
     try {
-      unlinkSync(lockPath);
-      console.log("commander.lock removed.");
+      if (existsSync(lockPath)) {
+        unlinkSync(lockPath);
+        console.log("commander.lock removed.");
+      }
     } catch {}
-
-    const statusFilePath = join(opts.colony, ".commander-status.json");
     try {
       if (existsSync(statusFilePath)) {
         unlinkSync(statusFilePath);
@@ -744,6 +1295,14 @@ program
   .description("Show worker status")
   .option("-c, --colony <path>", "Colony root directory", process.cwd())
   .option("--json", "Output as JSON", false)
+  .addHelpText(
+    "after",
+    `
+Examples:
+  termite-commander workers --colony .
+  termite-commander workers --colony . --json
+`
+  )
   .action(async (opts: { colony: string; json: boolean }) => {
     const statusFilePath = join(opts.colony, ".commander-status.json");
 

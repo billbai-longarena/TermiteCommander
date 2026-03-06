@@ -15,6 +15,7 @@ import {
 } from "../config/model-resolver.js";
 import { OpenCodeLauncher } from "../colony/opencode-launcher.js";
 import { ensureWorkspaceBoundary } from "../colony/workspace-boundary.js";
+import { ensureTermiteProtocolInstalled } from "../colony/protocol-installer.js";
 
 export interface PipelineConfig {
   colonyRoot: string;
@@ -172,9 +173,11 @@ export class Pipeline {
       designContext,
     );
     let signalsJson = "[]";
+    let degradedDecomposition = false;
     try {
       signalsJson = await callLLM(decompositionPrompt, this.config.llmConfig);
     } catch (err: any) {
+      degradedDecomposition = true;
       console.error(`[commander] Decomposition failed, using fallback signal: ${err?.message ?? "unknown error"}`);
       signalsJson = JSON.stringify([this.fallbackSignal(objective)]);
     }
@@ -187,6 +190,7 @@ export class Pipeline {
       }
       signals = parsed;
     } catch {
+      degradedDecomposition = true;
       console.error("[commander] Failed to parse signals JSON, using fallback signal");
       signals = [this.fallbackSignal(objective)];
     }
@@ -201,6 +205,13 @@ export class Pipeline {
     signals.forEach((signal, i) => originalIdBySignal.set(signal, originalIds[i]));
 
     signals = SignalDecomposer.topologicalSort(signals);
+
+    if (degradedDecomposition) {
+      console.warn(
+        "[commander] DEGRADED MODE: decomposition fallback was used. " +
+        "Review PLAN.md and signal quality before large-scale execution.",
+      );
+    }
 
     const remappedIds = signals.map((_, i) => `S-${String(i + 1).padStart(3, "0")}`);
     const newIdByOriginalId = new Map<string, string>();
@@ -291,65 +302,11 @@ export class Pipeline {
    * If scripts/termite-db.sh is missing, run install.sh from the protocol source.
    */
   async ensureProtocol(): Promise<void> {
-    const dbScript = join(this.config.colonyRoot, "scripts", "termite-db.sh");
-    if (existsSync(dbScript)) {
-      console.log("[commander] Termite Protocol detected.");
-      const setup = ensureWorkspaceBoundary(this.config.colonyRoot);
-      if (setup.createdFiles.length > 0 || setup.createdDirs.length > 0 || setup.gitignoreUpdated) {
-        console.log(
-          `[commander] Workspace boundary initialized: dirs=${setup.createdDirs.length} files=${setup.createdFiles.length} gitignore=${setup.gitignoreUpdated ? "updated" : "ok"}`,
-        );
-      }
-      return;
-    }
-
-    console.log("[commander] Termite Protocol not found. Installing...");
-
-    // Strategy 1: Look for install.sh relative to commander package
-    //   skillSourceDir = commander/skills/termite → ../../../TermiteProtocol/install.sh
-    const localInstall = join(
-      this.config.skillSourceDir,
-      "../../../TermiteProtocol/install.sh",
-    );
-
-    const { execFileSync } = await import("node:child_process");
-
-    if (existsSync(localInstall)) {
-      console.log("[commander] Using local TermiteProtocol/install.sh");
-      execFileSync("bash", [localInstall, this.config.colonyRoot], {
-        stdio: "inherit",
-      });
-    } else {
-      // Strategy 2: Clone from GitHub and install
-      console.log("[commander] Cloning Termite Protocol from GitHub...");
-      const tmpDir = join(this.config.colonyRoot, ".termite-install-tmp");
-      try {
-        execFileSync("git", [
-          "clone", "--depth", "1",
-          "https://github.com/billbai-longarena/Termite-Protocol.git",
-          tmpDir,
-        ], { stdio: "inherit" });
-        execFileSync("bash", [join(tmpDir, "install.sh"), this.config.colonyRoot], {
-          stdio: "inherit",
-        });
-      } catch (err: any) {
-        console.error(
-          "[commander] Failed to install Termite Protocol automatically.\n" +
-            "Install it manually:\n" +
-            "  git clone https://github.com/billbai-longarena/Termite-Protocol /tmp/termite\n" +
-            `  bash /tmp/termite/install.sh ${this.config.colonyRoot}\n` +
-            "  rm -rf /tmp/termite",
-        );
-        throw new Error("Termite Protocol installation failed");
-      } finally {
-        // Cleanup temp clone
-        try {
-          const { rmSync } = await import("node:fs");
-          rmSync(tmpDir, { recursive: true, force: true });
-        } catch {}
-      }
-    }
-    console.log("[commander] Termite Protocol installed.");
+    ensureTermiteProtocolInstalled({
+      colonyRoot: this.config.colonyRoot,
+      skillSourceDir: this.config.skillSourceDir,
+      logger: (message) => console.log(message),
+    });
     const setup = ensureWorkspaceBoundary(this.config.colonyRoot);
     if (setup.createdFiles.length > 0 || setup.createdDirs.length > 0 || setup.gitignoreUpdated) {
       console.log(
@@ -389,7 +346,10 @@ export class Pipeline {
     }
   }
 
-  async runWithHeartbeats(plan: Plan): Promise<void> {
+  async runWithHeartbeats(
+    plan: Plan,
+    opts?: { skipRuntimeSmoke?: boolean; runtimeSmokeTimeoutMs?: number },
+  ): Promise<void> {
     // Pre-flight checks
     const runtimeCheck = await this.launcher.checkRequiredRuntimes();
     if (runtimeCheck.missing.length > 0) {
@@ -407,6 +367,32 @@ export class Pipeline {
           `Configured workers: ${this.models.workers.map((w) => `${w.cli}@${w.model ?? this.models.defaultWorkerModel} ×${w.count}`).join(" | ")}`,
       );
       throw new Error(`Missing worker CLIs: ${runtimeCheck.missing.join(", ")}`);
+    }
+
+    const skipRuntimeSmoke = Boolean(opts?.skipRuntimeSmoke || process.env.TERMITE_SKIP_RUNTIME_SMOKE === "1");
+    if (!skipRuntimeSmoke) {
+      const timeoutMs = opts?.runtimeSmokeTimeoutMs ?? 30_000;
+      console.log(`[commander] Running worker runtime/model smoke checks (timeout ${Math.floor(timeoutMs / 1000)}s)...`);
+      const probes = await this.launcher.smokeTestConfiguredWorkers(timeoutMs);
+      const failedProbes = probes.filter((probe) => !probe.ok && !probe.skipped);
+      if (failedProbes.length > 0) {
+        for (const probe of probes) {
+          const mode = probe.skipped ? "SKIP" : probe.ok ? "OK" : "FAIL";
+          console.error(
+            `[commander] Runtime probe ${probe.runtime}@${probe.model ?? "<default>"} => ${mode}: ${probe.detail}`,
+          );
+        }
+        throw new Error(
+          "Worker runtime/model preflight failed. " +
+          "Run 'termite-commander doctor --config --runtime --colony .' to inspect and fix.",
+        );
+      }
+      const skippedCount = probes.filter((probe) => probe.skipped).length;
+      console.log(
+        `[commander] Runtime/model smoke checks passed (${probes.length - skippedCount}/${probes.length} executed).`,
+      );
+    } else {
+      console.log("[commander] Runtime/model smoke checks skipped.");
     }
 
     // Ensure protocol + genesis before starting

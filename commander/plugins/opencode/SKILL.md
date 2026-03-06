@@ -13,6 +13,7 @@ Decomposes objectives into atomic signals that weak models (haiku-class) can exe
 
 | Intent | Command |
 |--------|---------|
+| One-shot init (recommended first run) | `termite-commander init --colony "$PWD"` |
 | Plan + run (with design doc) | `nohup termite-commander plan "<obj>" --plan .termite/worker/PLAN.md --colony "$PWD" --run > .commander.log 2>&1 &` |
 | Plan + run (with context) | `nohup termite-commander plan "<obj>" --context "<summary>" --colony "$PWD" --run > .commander.log 2>&1 &` |
 | Status | `termite-commander status --colony "$PWD"` |
@@ -20,7 +21,7 @@ Decomposes objectives into atomic signals that weak models (haiku-class) can exe
 | Config bootstrap | `termite-commander config bootstrap --from auto --colony "$PWD"` |
 | Config import (dry-run) | `termite-commander config import --from auto --colony "$PWD"` |
 | Config import (apply) | `termite-commander config import --from auto --apply --colony "$PWD"` |
-| Doctor | `termite-commander doctor --config --colony "$PWD"` |
+| Doctor | `termite-commander doctor --config --runtime --colony "$PWD"` |
 | Workers | `termite-commander workers --colony "$PWD"` |
 | Stop | `termite-commander stop --colony "$PWD"` |
 | Resume | `termite-commander resume --colony "$PWD"` |
@@ -58,10 +59,10 @@ Commander model is required. Resolution priority:
 
 Recommended setup flow:
 ```bash
-termite-commander config bootstrap --from auto
+termite-commander init --colony "$PWD"
 ```
 
-`doctor` also checks provider credentials for `commander.model` and exits non-zero if required env vars are missing.
+`doctor --runtime` additionally checks runtime binary/model/provider compatibility before `plan --run`.
 
 ## Status Files
 
