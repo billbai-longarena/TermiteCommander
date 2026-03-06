@@ -19,6 +19,7 @@ Thumbs.db
 .commander-status.json
 .commander.log
 .commander-nohup-pid
+.commander-daemon.json
 .field-breath
 commander.lock
 colony.lock

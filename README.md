@@ -301,9 +301,9 @@ export TERMITE_WORKERS=openclaw@main:1
 ```
 Commander handles the full pipeline: detect protocol (install from GitHub if missing) → genesis → signal decomposition → dispatch → launch workers → heartbeat monitoring.
 
-**Step 6** — Open another terminal for the TUI dashboard:
+**Step 6** — Open another terminal for the dashboard:
 ```bash
-cd ~/your-project && termite-commander
+cd ~/your-project && termite-commander dashboard --mode auto
 ```
 
 **Step 7** — The colony auto-stops when complete. Review results:
@@ -395,7 +395,8 @@ OpenClaw note: `openclaw agent` requires routing context (`--agent` / `--to` / `
 ## CLI Reference
 
 ```
-termite-commander                      TUI dashboard (full-screen, real-time)
+termite-commander                      Dashboard auto mode (TUI on TTY, watch fallback in agent sessions)
+termite-commander dashboard            Explicit dashboard command (auto/tui/watch/off)
 termite-commander init                 One-shot init (protocol + skills + config bootstrap + doctor)
 termite-commander install              Install skills into project
 termite-commander plan <objective>     Decompose and execute
@@ -412,8 +413,12 @@ termite-commander config import         Import/recommend model config from other
 termite-commander config bootstrap      One-shot import+merge+doctor tool (skill-friendly)
   --from <auto|opencode|claude|codex>    Source selection (default: auto)
   --force                                 Overwrite existing fields
-termite-commander doctor [--config] [--runtime]  Run diagnostics (non-zero exit on config/credential/runtime failures)
+termite-commander doctor [--config] [--credentials] [--runtime]  Run diagnostics (non-zero exit on config/credential/runtime failures)
+termite-commander daemon start <objective>  Start background commander run (inherits current env + PATH)
+termite-commander daemon status        Show daemon metadata + liveness
+termite-commander daemon stop          Stop daemon + commander runtime
 termite-commander workers [--json]     Worker status
+termite-commander logs                 Tail issue-ready logs (`.commander.events.log` preferred)
 termite-commander stop                 Stop all + cleanup stale state
 termite-commander resume               Resume from halt
 termite-commander watch                Polling status (non-TUI)
@@ -426,10 +431,36 @@ termite-commander watch                Polling status (non-TUI)
 Full-screen terminal dashboard (alternate screen buffer):
 
 - **Signal progress** — bar + full list from DB with status/type/worker
+- **Signal details** — full signal content (`next_hint`, parent/depth, module/tags, parked metadata)
 - **Worker status** — model labels, session IDs, duration, stale detection (dead workers marked with cleanup instructions)
 - **Git commits** — real-time feed from worker commits
-- **Activity log** — tails `.commander.log`
+- **Activity log** — tails `.commander.events.log` (falls back to `.commander.log`)
 - **Responsive** — adapts to terminal width
+
+---
+
+## Background / Daemon Mode
+
+Use the built-in daemon command for long-running background execution:
+
+```bash
+termite-commander daemon start "Build OAuth2 auth" --plan .termite/worker/PLAN.md --colony .
+termite-commander daemon status --colony .
+termite-commander daemon stop --colony .
+```
+
+Daemon logs are written to:
+- `.termite/logs/commander-daemon.out.log`
+- `.termite/logs/commander-daemon.err.log`
+
+### launchd/systemd Notes
+
+- Service managers do **not** automatically inherit your interactive shell environment.
+- Missing API keys in daemon mode are usually env injection issues, not Commander logic issues.
+- `PATH` in service context is often different; ensure worker CLIs (`opencode` / `codex` / `claude`) are reachable.
+- Recommended preflight:
+  1. `termite-commander doctor --config --credentials --runtime --colony .`
+  2. `termite-commander daemon start "<objective>" --colony .`
 
 ---
 

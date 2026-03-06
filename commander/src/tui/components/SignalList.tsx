@@ -18,7 +18,7 @@ function statusIcon(status: string): { char: string; color: string } {
   }
 }
 
-export function SignalList({ signals, maxItems = 15, termWidth = 80 }: SignalListProps) {
+export function SignalList({ signals, maxItems = 50, termWidth = 80 }: SignalListProps) {
   // Dynamic title width: total - padding(2) - id(8) - type(10) - status(12) - claimedBy(~12)
   const fixedCols = 2 + 8 + 10 + 12 + 12;
   const titleMaxLen = Math.max(15, termWidth - fixedCols - 2); // -2 for padEnd gap
@@ -28,14 +28,47 @@ export function SignalList({ signals, maxItems = 15, termWidth = 80 }: SignalLis
     <Box flexDirection="column">
       {display.map((s) => {
         const icon = statusIcon(s.status);
+        const owner = s.claimedBy || "unassigned";
+        const parent = s.parentId || "-";
+        const source = s.source || "-";
+        const module = s.module || "-";
+        const tags = s.tags || "[]";
         return (
-          <Box key={s.id}>
-            <Text>{"  "}</Text>
-            <Text>{s.id.padEnd(8)}</Text>
-            <Text dimColor>{s.type.padEnd(10)}</Text>
-            <Text>{truncate(s.title, titleMaxLen).padEnd(titleColW)}</Text>
-            <Text color={icon.color}>{`${icon.char} ${s.status}`.padEnd(12)}</Text>
-            <Text dimColor>{s.claimedBy}</Text>
+          <Box key={s.id} flexDirection="column">
+            <Box>
+              <Text>{"  "}</Text>
+              <Text>{s.id.padEnd(8)}</Text>
+              <Text dimColor>{s.type.padEnd(10)}</Text>
+              <Text>{truncate(s.title, titleMaxLen).padEnd(titleColW)}</Text>
+              <Text color={icon.color}>{`${icon.char} ${s.status}`.padEnd(12)}</Text>
+              <Text dimColor>{owner}</Text>
+            </Box>
+            <Box>
+              <Text>{"    "}</Text>
+              <Text dimColor wrap="truncate-end">
+                {`meta: source=${source} module=${module} parent=${parent} depth=${s.depth} weight=${s.weight} touches=${s.touchCount} tags=${tags}`}
+              </Text>
+            </Box>
+            {s.nextHint && (
+              <Box>
+                <Text>{"    "}</Text>
+                <Text wrap="wrap">{`next_hint: ${s.nextHint}`}</Text>
+              </Box>
+            )}
+            {s.childHint && (
+              <Box>
+                <Text>{"    "}</Text>
+                <Text dimColor wrap="wrap">{`child_hint: ${s.childHint}`}</Text>
+              </Box>
+            )}
+            {s.parkedReason && (
+              <Box>
+                <Text>{"    "}</Text>
+                <Text color="yellow" wrap="wrap">
+                  {`parked: ${s.parkedReason}${s.parkedConditions ? ` | conditions=${s.parkedConditions}` : ""}`}
+                </Text>
+              </Box>
+            )}
           </Box>
         );
       })}

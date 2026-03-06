@@ -134,11 +134,15 @@ export function MonitorApp({ colonyRoot }: MonitorAppProps) {
         <Box flexDirection="column" marginTop={1}>
           <Text bold>{" Signals"}</Text>
           {signals.length > 0 ? (
-            <SignalList signals={signals} termWidth={termWidth} />
+            <SignalList
+              signals={signals}
+              maxItems={signals.length}
+              termWidth={termWidth}
+            />
           ) : (
             <Text dimColor>
               {"  "}
-              {status.total} signals in DB (detail query unavailable)
+              {status.total} signals in DB (waiting for detail snapshot)
             </Text>
           )}
         </Box>

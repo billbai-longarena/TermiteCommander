@@ -88,9 +88,16 @@ termite-commander resume --colony "$PWD"
 termite-commander watch --colony "$PWD"
 ```
 
-Or launch the read-only TUI dashboard:
+Or launch the dashboard:
 ```bash
-termite-commander
+termite-commander dashboard --mode auto
+```
+
+### Daemon (long-running background execution)
+```bash
+termite-commander daemon start "<objective>" --plan .termite/worker/PLAN.md --colony "$PWD"
+termite-commander daemon status --colony "$PWD"
+termite-commander daemon stop --colony "$PWD"
 ```
 
 ## Model Configuration
@@ -155,7 +162,7 @@ Recommended flow:
 termite-commander init --colony "$PWD"
 # Optional: if you need to preserve existing fields strictly:
 termite-commander config import --from auto --apply
-termite-commander doctor --config --runtime
+termite-commander doctor --config --credentials --runtime
 ```
 
 ## Routing Logic
@@ -166,13 +173,15 @@ termite-commander doctor --config --runtime
 4. User says "workers/工人/谁在工作" → **Show Workers**
 5. User says "resume/continue/继续" → **Resume**
 6. User says "configure/配置/model/模型" → **Model Configuration**: run `termite-commander config bootstrap --from auto` as the tool, then edit `termite.config.json` only if needed
-7. User says "watch/monitor/监控" → suggest opening TUI: `termite-commander`
+7. User says "watch/monitor/监控" → suggest dashboard: `termite-commander dashboard --mode auto`
 
 ## Important Notes
 
 - Commander runs as a background process (`nohup`). PID stored in `commander.lock`.
 - Status snapshots written to `.commander-status.json` on every heartbeat cycle.
-- Use `termite-commander` (no args) to open read-only TUI dashboard in a separate terminal.
+- Use `termite-commander dashboard --mode auto` (or `termite-commander`) to open dashboard in a separate terminal.
+- Use `termite-commander daemon start ...` for managed background runs with inherited env/PATH.
+- Runtime logs are captured in `.commander.events.log` (rotated), with optional legacy output in `.commander.log`.
 - Commander does NOT do research or design — that's your job. Commander only decomposes and orchestrates.
 - Use `.termite/human/` for unstable drafts and `.termite/worker/` for worker-facing finalized context.
 - **After running `termite-commander install`**, restart Claude Code session for the plugin to take effect.

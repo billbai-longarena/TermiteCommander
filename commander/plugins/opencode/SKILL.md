@@ -21,11 +21,15 @@ Decomposes objectives into atomic signals that weak models (haiku-class) can exe
 | Config bootstrap | `termite-commander config bootstrap --from auto --colony "$PWD"` |
 | Config import (dry-run) | `termite-commander config import --from auto --colony "$PWD"` |
 | Config import (apply) | `termite-commander config import --from auto --apply --colony "$PWD"` |
-| Doctor | `termite-commander doctor --config --runtime --colony "$PWD"` |
+| Doctor | `termite-commander doctor --config --credentials --runtime --colony "$PWD"` |
+| Daemon start | `termite-commander daemon start "<obj>" --plan .termite/worker/PLAN.md --colony "$PWD"` |
+| Daemon status | `termite-commander daemon status --colony "$PWD"` |
+| Daemon stop | `termite-commander daemon stop --colony "$PWD"` |
 | Workers | `termite-commander workers --colony "$PWD"` |
+| Logs | `termite-commander logs --colony "$PWD"` |
 | Stop | `termite-commander stop --colony "$PWD"` |
 | Resume | `termite-commander resume --colony "$PWD"` |
-| TUI Dashboard | `termite-commander` |
+| Dashboard (auto) | `termite-commander dashboard --mode auto` |
 
 ## Signal Standards for Weak Models
 
@@ -68,5 +72,7 @@ termite-commander init --colony "$PWD"
 
 - `commander.lock` — `{ pid, startedAt, objective }`. Presence = Commander running.
 - `.commander-status.json` — heartbeat snapshot: signal counts, worker states, model info.
+- `.commander-daemon.json` — daemon metadata for background starts.
+- `.commander.events.log` — rotated runtime event log (preferred for issue reports).
 - `.termite/human/` — human draft zone (worker should ignore).
 - `.termite/worker/` — worker-facing context zone.

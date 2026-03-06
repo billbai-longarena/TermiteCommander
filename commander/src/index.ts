@@ -4,8 +4,15 @@ import { program } from "commander";
 import { Pipeline, type PipelineConfig } from "./engine/pipeline.js";
 import { SignalBridge } from "./colony/signal-bridge.js";
 import { resolve, join } from "node:path";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { readTermiteConfigWithPath, resolveModels, type ResolvedModels } from "./config/model-resolver.js";
+import { existsSync, readFileSync, unlinkSync, mkdirSync, openSync, closeSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import {
+  readTermiteConfigWithPath,
+  resolveModels,
+  extractProvider,
+  type ResolvedModels,
+  type WorkerRuntime,
+} from "./config/model-resolver.js";
 import { ensureWorkspaceBoundary } from "./colony/workspace-boundary.js";
 import { checkProviderCredentials, callLLM, configFromResolved } from "./llm/provider.js";
 import {
@@ -17,11 +24,363 @@ import {
 } from "./config/importer.js";
 import { OpenCodeLauncher, type RuntimeSmokeProbe } from "./colony/opencode-launcher.js";
 import { ensureTermiteProtocolInstalled } from "./colony/protocol-installer.js";
+import { startConsoleCapture } from "./logging/capture.js";
+import { getCommanderLogPath, readTailLines } from "./logging/files.js";
 
 function detectPlatform(): "opencode" | "claude-code" | "unknown" {
   if (process.env.CLAUDE_PROJECT_DIR) return "claude-code";
   if (process.env.OPENCODE_SESSION) return "opencode";
   return "unknown";
+}
+
+type DashboardMode = "auto" | "tui" | "watch" | "off";
+
+function isAgentSession(): boolean {
+  const markers = [
+    process.env.CODEX_CLI,
+    process.env.CODEX_CI,
+    process.env.CODEX_THREAD_ID,
+    process.env.CLAUDE_PROJECT_DIR,
+    process.env.OPENCODE_SESSION,
+  ];
+  return markers.some((value) => Boolean(value));
+}
+
+function parseDashboardMode(value: string): DashboardMode {
+  const normalized = value.toLowerCase().trim();
+  if (["auto", "tui", "watch", "off"].includes(normalized)) {
+    return normalized as DashboardMode;
+  }
+  throw new Error("Invalid --dashboard mode. Use: auto | tui | watch | off");
+}
+
+async function startWatchMonitor(colonyRoot: string, intervalMs: number): Promise<void> {
+  const bridge = new SignalBridge(colonyRoot);
+
+  const tick = async () => {
+    const status = await bridge.status();
+    const stall = await bridge.checkStall(5);
+    process.stdout.write(
+      `\r[${new Date().toISOString()}] total=${status.total} open=${status.open} claimed=${status.claimed} done=${status.done} stall=${stall.stalled}   `,
+    );
+  };
+
+  await tick();
+  setInterval(() => {
+    void tick().catch((err: any) => {
+      console.error(`[watch] tick failed: ${err?.message ?? "unknown error"}`);
+    });
+  }, intervalMs);
+}
+
+async function launchDashboard(
+  colonyRoot: string,
+  mode: DashboardMode,
+  opts?: { intervalMs?: number; announce?: boolean; json?: boolean },
+): Promise<void> {
+  if (mode === "off") return;
+
+  const stdoutTty = Boolean(process.stdout.isTTY);
+  const fallbackToWatch = mode === "watch" || (mode === "auto" && isAgentSession());
+  const shouldTryTui = mode === "tui" || (mode === "auto" && stdoutTty);
+  const intervalMs = opts?.intervalMs ?? 5000;
+  const announce = opts?.announce ?? false;
+
+  if (shouldTryTui) {
+    if (!stdoutTty) {
+      if (mode === "tui") {
+        throw new Error("TUI requires a TTY-enabled stdout terminal.");
+      }
+    } else {
+      if (announce && !opts?.json) {
+        console.log("\nStarting TUI dashboard (Ctrl+C to exit)...");
+      }
+      const { startTUI } = await import("./tui/index.js");
+      await startTUI(colonyRoot);
+      return;
+    }
+  }
+
+  if (fallbackToWatch) {
+    if (announce && !opts?.json) {
+      console.log("\nStarting watch monitor (Ctrl+C to exit)...");
+    }
+    await startWatchMonitor(colonyRoot, intervalMs);
+  }
+}
+
+function parsePositiveInt(value: string, fallback: number): number {
+  const parsed = parseInt(value, 10);
+  return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
+}
+
+type WorkerCredentialState = "ok" | "fail" | "unknown";
+
+interface WorkerCredentialStatus {
+  runtime: WorkerRuntime;
+  model: string;
+  provider: string;
+  state: WorkerCredentialState;
+  detail: string;
+  missing: string[];
+}
+
+interface DaemonMetadata {
+  pid: number;
+  startedAt: string;
+  objective: string;
+  colonyRoot: string;
+  command: string[];
+  outLog: string;
+  errLog: string;
+}
+
+function getDaemonMetaPath(colonyRoot: string): string {
+  return join(colonyRoot, ".commander-daemon.json");
+}
+
+function readDaemonMetadata(colonyRoot: string): DaemonMetadata | null {
+  const metaPath = getDaemonMetaPath(colonyRoot);
+  if (!existsSync(metaPath)) return null;
+  try {
+    return JSON.parse(readFileSync(metaPath, "utf-8")) as DaemonMetadata;
+  } catch {
+    return null;
+  }
+}
+
+function removeDaemonMetadata(colonyRoot: string): void {
+  const metaPath = getDaemonMetaPath(colonyRoot);
+  try {
+    if (existsSync(metaPath)) unlinkSync(metaPath);
+  } catch {
+    // best effort cleanup
+  }
+}
+
+function getCommanderLockData(colonyRoot: string): { pid: number; startedAt: string; objective: string } | null {
+  const lockPath = join(colonyRoot, "commander.lock");
+  if (!existsSync(lockPath)) return null;
+  try {
+    return JSON.parse(readFileSync(lockPath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+function resolveWorkerCredentialStatuses(models: ResolvedModels): WorkerCredentialStatus[] {
+  const seen = new Set<string>();
+  const baseSpecs =
+    models.workers.length > 0
+      ? models.workers
+      : [{ cli: models.defaultWorkerCli, model: models.defaultWorkerModel, count: 1 }];
+  const results: WorkerCredentialStatus[] = [];
+
+  for (const spec of baseSpecs) {
+    const runtime = spec.cli;
+    const model = (spec.model ?? models.defaultWorkerModel ?? "").trim() || models.defaultWorkerModel;
+    const key = `${runtime}|${model}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    if (runtime === "openclaw") {
+      results.push({
+        runtime,
+        model,
+        provider: "openclaw",
+        state: "unknown",
+        detail: "OpenClaw credentials are managed by OpenClaw route/session context; static env validation is not available.",
+        missing: [],
+      });
+      continue;
+    }
+
+    if (runtime === "claude") {
+      const cred = checkProviderCredentials("anthropic");
+      results.push({
+        runtime,
+        model,
+        provider: "anthropic",
+        state: cred.ok ? "ok" : "fail",
+        detail: cred.detail,
+        missing: cred.missing,
+      });
+      continue;
+    }
+
+    if (runtime === "opencode" && model.toLowerCase().startsWith("github-copilot/")) {
+      results.push({
+        runtime,
+        model,
+        provider: "github-copilot",
+        state: "unknown",
+        detail:
+          "GitHub Copilot credentials are managed by OpenCode auth/session state. Use runtime smoke tests for readiness.",
+        missing: [],
+      });
+      continue;
+    }
+
+    const provider = extractProvider(model);
+    const cred = checkProviderCredentials(provider);
+    results.push({
+      runtime,
+      model,
+      provider,
+      state: cred.ok ? "ok" : "fail",
+      detail: cred.detail,
+      missing: cred.missing,
+    });
+  }
+
+  return results;
+}
+
+function stopCommanderProcess(colonyRoot: string, force: boolean): void {
+  const lockPath = join(colonyRoot, "commander.lock");
+  const statusFilePath = join(colonyRoot, ".commander-status.json");
+
+  let lockData: { pid: number; startedAt: string; objective: string } | null = null;
+  let statusPid: number | null = null;
+
+  if (existsSync(statusFilePath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(statusFilePath, "utf-8"));
+      if (typeof parsed?.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0) {
+        statusPid = parsed.pid;
+      }
+    } catch {}
+  }
+
+  if (!existsSync(lockPath)) {
+    if (!force) {
+      console.log("No commander.lock found. Commander is not running.");
+      return;
+    }
+    console.log("No commander.lock found. --force enabled: cleaning stale status files.");
+  } else {
+    try {
+      lockData = JSON.parse(readFileSync(lockPath, "utf-8"));
+    } catch {
+      if (!force) {
+        console.error("Failed to parse commander.lock.");
+        return;
+      }
+      console.warn("Failed to parse commander.lock. --force enabled: continuing cleanup.");
+    }
+  }
+
+  if (lockData?.pid) {
+    console.log(`Stopping Commander (PID ${lockData.pid})...`);
+    try {
+      process.kill(lockData.pid, "SIGTERM");
+      console.log("SIGTERM sent.");
+    } catch (err: any) {
+      if (err.code === "ESRCH") {
+        console.log("Process not found (already exited).");
+      } else {
+        console.error(`Failed to kill process: ${err.message}`);
+      }
+    }
+  }
+
+  if (force && statusPid && (!lockData || statusPid !== lockData.pid)) {
+    try {
+      process.kill(statusPid, "SIGTERM");
+      console.log(`Force cleanup: sent SIGTERM to orphan status PID ${statusPid}.`);
+    } catch {}
+  }
+
+  try {
+    if (existsSync(lockPath)) {
+      unlinkSync(lockPath);
+      console.log("commander.lock removed.");
+    }
+  } catch {}
+  try {
+    if (existsSync(statusFilePath)) {
+      unlinkSync(statusFilePath);
+      console.log(".commander-status.json removed.");
+    }
+  } catch {}
+
+  removeDaemonMetadata(colonyRoot);
+  console.log("Colony cleaned up. Ready for next run.");
+}
+
+function startDaemonPlan(params: {
+  colonyRoot: string;
+  objective: string;
+  planFile?: string;
+  contextText?: string;
+  runtimeTimeoutSec: number;
+  skipRuntimeSmoke: boolean;
+}): DaemonMetadata {
+  const colonyRoot = resolve(params.colonyRoot);
+  const existingLock = getCommanderLockData(colonyRoot);
+  if (existingLock && isProcessAlive(existingLock.pid)) {
+    throw new Error(`Commander is already running (PID ${existingLock.pid}). Stop it first.`);
+  }
+
+  const logsDir = join(colonyRoot, ".termite", "logs");
+  mkdirSync(logsDir, { recursive: true });
+  const outLog = join(logsDir, "commander-daemon.out.log");
+  const errLog = join(logsDir, "commander-daemon.err.log");
+  const outFd = openSync(outLog, "a");
+  const errFd = openSync(errLog, "a");
+
+  const commandArgs = [
+    process.argv[1],
+    "plan",
+    params.objective,
+    "--colony",
+    colonyRoot,
+    "--run",
+    "--runtime-timeout",
+    String(params.runtimeTimeoutSec),
+  ];
+  if (params.planFile) {
+    commandArgs.push("--plan", params.planFile);
+  } else if (params.contextText) {
+    commandArgs.push("--context", params.contextText);
+  }
+  if (params.skipRuntimeSmoke) {
+    commandArgs.push("--skip-runtime-smoke");
+  }
+
+  const child = spawn(process.execPath, commandArgs, {
+    cwd: colonyRoot,
+    detached: true,
+    stdio: ["ignore", outFd, errFd],
+    env: {
+      ...process.env,
+      TERMITE_DAEMON_MODE: "1",
+      TERMITE_DAEMON_OUT_LOG: outLog,
+      TERMITE_DAEMON_ERR_LOG: errLog,
+    },
+  });
+  if (!child.pid || child.pid <= 0) {
+    try {
+      closeSync(outFd);
+      closeSync(errFd);
+    } catch {}
+    throw new Error("Failed to spawn daemon process.");
+  }
+  child.unref();
+  closeSync(outFd);
+  closeSync(errFd);
+
+  const metadata: DaemonMetadata = {
+    pid: child.pid,
+    startedAt: new Date().toISOString(),
+    objective: params.objective,
+    colonyRoot,
+    command: [process.execPath, ...commandArgs],
+    outLog,
+    errLog,
+  };
+  writeFileSync(getDaemonMetaPath(colonyRoot), JSON.stringify(metadata, null, 2), "utf-8");
+  return metadata;
 }
 
 const pkg = JSON.parse(
@@ -175,7 +534,7 @@ Quick Start (new project):
   3) termite-commander status --colony .
 
 Minimal Runtime Notes:
-  - No args: opens read-only TUI dashboard.
+  - No args: opens dashboard (auto mode: TUI if terminal supports it, otherwise watch in agent sessions).
   - commander.model is required before planning.
   - plan --run auto-installs Termite Protocol if missing.
   - Install at least one worker CLI used by your config: opencode/claude/codex/openclaw.
@@ -199,7 +558,7 @@ Default flow:
   2) Install Commander skills/plugins into the project
   3) Bootstrap model config from opencode/claude/codex config
   4) Run config + credential + runtime/model preflight checks
-  5) Optionally start dashboard monitor (auto mode only in agent sessions)
+  5) Optionally start dashboard monitor (auto: TUI on TTY, otherwise watch in agent sessions)
 
 Examples:
   termite-commander init --colony .
@@ -214,14 +573,11 @@ Examples:
     dashboard: string;
     json: boolean;
   }) => {
+    const capture = startConsoleCapture(opts.colony);
     try {
       const source = parseImportSource(opts.from);
-      const timeoutSecRaw = parseInt(opts.runtimeTimeout, 10);
-      const timeoutMs = Number.isNaN(timeoutSecRaw) || timeoutSecRaw <= 0 ? 30_000 : timeoutSecRaw * 1000;
-      const dashboardMode = (opts.dashboard ?? "auto").toLowerCase().trim();
-      if (!["auto", "tui", "watch", "off"].includes(dashboardMode)) {
-        throw new Error("Invalid --dashboard mode. Use: auto | tui | watch | off");
-      }
+      const timeoutMs = parsePositiveInt(opts.runtimeTimeout, 30) * 1000;
+      const dashboardMode = parseDashboardMode(opts.dashboard ?? "auto");
 
       const skillSourceDir = resolve(import.meta.dirname ?? ".", "../skills/termite");
 
@@ -358,45 +714,18 @@ Examples:
         console.log('  termite-commander plan "<objective>" --plan .termite/worker/PLAN.md --colony . --run');
       }
 
-      const autoDashboard = dashboardMode === "auto";
-      const agentSession =
-        Boolean(process.env.CODEX_CLI) ||
-        Boolean(process.env.CLAUDE_PROJECT_DIR) ||
-        Boolean(process.env.OPENCODE_SESSION);
-      const shouldStartTui =
-        dashboardMode === "tui" ||
-        (autoDashboard && agentSession && process.stdout.isTTY && process.stdin.isTTY);
-      const shouldStartWatch =
-        dashboardMode === "watch" ||
-        (autoDashboard && agentSession && !shouldStartTui);
-
-      if (shouldStartTui) {
-        if (!opts.json) {
-          console.log("\nStarting TUI dashboard (Ctrl+C to exit)...");
-        }
-        const { startTUI } = await import("./tui/index.js");
-        await startTUI(opts.colony);
-        return;
-      }
-
-      if (shouldStartWatch) {
-        if (!opts.json) {
-          console.log("\nStarting watch monitor (Ctrl+C to exit)...");
-        }
-        const bridge = new SignalBridge(opts.colony);
-        const tick = async () => {
-          const status = await bridge.status();
-          const stall = await bridge.checkStall(5);
-          process.stdout.write(
-            `\r[${new Date().toISOString()}] total=${status.total} open=${status.open} claimed=${status.claimed} done=${status.done} stall=${stall.stalled}   `,
-          );
-        };
-        await tick();
-        setInterval(tick, 5000);
+      if (!opts.json) {
+        await launchDashboard(opts.colony, dashboardMode, {
+          intervalMs: 5000,
+          announce: true,
+          json: opts.json,
+        });
       }
     } catch (err: any) {
       console.error(`[init] failed: ${err?.message ?? "unknown error"}`);
       process.exit(1);
+    } finally {
+      capture.stop();
     }
   });
 
@@ -515,6 +844,7 @@ Execution modes:
     skipRuntimeSmoke: boolean;
     runtimeTimeout: string;
   }) => {
+    const capture = startConsoleCapture(opts.colony);
     try {
       const defaultWorkerPlanPath = join(opts.colony, ".termite", "worker", "PLAN.md");
       const planFile =
@@ -543,10 +873,8 @@ Execution modes:
 
       if (opts.run) {
         console.log("\n[commander] Starting colony execution...");
-        console.log("[commander] Open another terminal and run 'termite-commander' for the live dashboard.");
-        const timeoutSecRaw = parseInt(opts.runtimeTimeout, 10);
-        const runtimeSmokeTimeoutMs =
-          Number.isNaN(timeoutSecRaw) || timeoutSecRaw <= 0 ? 30_000 : timeoutSecRaw * 1000;
+        console.log("[commander] Open another terminal and run 'termite-commander dashboard --mode auto' for the live dashboard.");
+        const runtimeSmokeTimeoutMs = parsePositiveInt(opts.runtimeTimeout, 30) * 1000;
         await pipeline.runWithHeartbeats(plan, {
           skipRuntimeSmoke: opts.skipRuntimeSmoke,
           runtimeSmokeTimeoutMs,
@@ -560,6 +888,8 @@ Execution modes:
     } catch (err: any) {
       console.error(`\n[commander] Plan failed: ${err?.message ?? "unknown error"}`);
       process.exit(1);
+    } finally {
+      capture.stop();
     }
   });
 
@@ -1003,6 +1333,7 @@ program
   .description("Run diagnostics for commander runtime and config")
   .option("-c, --colony <path>", "Colony root directory", process.cwd())
   .option("--config", "Run model configuration diagnostics", false)
+  .option("--credentials", "Run credential diagnostics (commander + worker providers)", false)
   .option("--runtime", "Run worker runtime/model smoke diagnostics", false)
   .option("--runtime-timeout <sec>", "Runtime/model smoke timeout per probe (seconds)", "30")
   .option("--json", "Output as JSON", false)
@@ -1018,11 +1349,12 @@ Example:
   .action(async (opts: {
     colony: string;
     config: boolean;
+    credentials: boolean;
     runtime: boolean;
     runtimeTimeout: string;
     json: boolean;
   }) => {
-    const runConfig = opts.config || !opts.runtime;
+    const runConfig = opts.config || opts.credentials || !opts.runtime;
     const runRuntime = opts.runtime;
     const timeoutSecRaw = parseInt(opts.runtimeTimeout, 10);
     const timeoutMs = Number.isNaN(timeoutSecRaw) || timeoutSecRaw <= 0 ? 30_000 : timeoutSecRaw * 1000;
@@ -1030,7 +1362,9 @@ Example:
     const models = resolveModels(opts.colony);
     const configOk = !runConfig || models.issues.errors.length === 0;
     const credentials = getCredentialStatus(models);
-    const credentialsOk = !runConfig || !credentials.enabled || credentials.ok;
+    const workerCredentialStatuses = runConfig ? resolveWorkerCredentialStatuses(models) : [];
+    const workerCredentialsOk = workerCredentialStatuses.every((status) => status.state !== "fail");
+    const credentialsOk = (!runConfig || !credentials.enabled || credentials.ok) && workerCredentialsOk;
 
     let commanderProbe: { enabled: boolean; ok: boolean; detail: string } = {
       enabled: false,
@@ -1073,6 +1407,7 @@ Example:
           provider: credentials.provider,
           detail: credentials.detail,
           missing: credentials.missing,
+          workerProviders: workerCredentialStatuses,
         },
         runtime: {
           enabled: runRuntime,
@@ -1097,6 +1432,18 @@ Example:
           console.log(`  credentials: ${credentialsOk ? "OK" : "FAIL"} (${credentials.detail})`);
         } else {
           console.log(`  credentials: SKIPPED (${credentials.detail})`);
+        }
+        if (workerCredentialStatuses.length > 0) {
+          for (const workerCred of workerCredentialStatuses) {
+            const stateLabel =
+              workerCred.state === "ok" ? "OK" : workerCred.state === "fail" ? "FAIL" : "UNKNOWN";
+            console.log(
+              `  worker credential: ${stateLabel} runtime=${workerCred.runtime} model=${workerCred.model} provider=${workerCred.provider} (${workerCred.detail})`,
+            );
+            if (workerCred.state === "fail" && workerCred.missing.length > 0) {
+              console.log(`    missing: ${workerCred.missing.join(", ")}`);
+            }
+          }
         }
         console.log(
           `  resolved commander=${models.commanderModel || "<missing>"} provider=${models.commanderProvider}` +
@@ -1177,6 +1524,119 @@ Example:
     console.log("Colony resumed. Run 'termite-commander plan --run' with new objectives.");
   });
 
+const daemonCommand = program
+  .command("daemon")
+  .description("Manage commander daemon mode for long-running background execution");
+
+daemonCommand
+  .command("start <objective>")
+  .description("Start commander in background with plan --run")
+  .option("-c, --colony <path>", "Colony root directory", process.cwd())
+  .option("-p, --plan <file>", "Design document to use as decomposition context")
+  .option("--context <text>", "Direct text context for decomposition")
+  .option("--skip-runtime-smoke", "Skip worker runtime/model smoke tests before --run", false)
+  .option("--runtime-timeout <sec>", "Runtime/model smoke timeout per probe (seconds)", "60")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  termite-commander daemon start "Implement OAuth2 auth" --plan .termite/worker/PLAN.md --colony .
+  termite-commander daemon start "Fix flaky CI" --context "root cause summary" --colony .
+`
+  )
+  .action((objective: string, opts: {
+    colony: string;
+    plan?: string;
+    context?: string;
+    skipRuntimeSmoke: boolean;
+    runtimeTimeout: string;
+  }) => {
+    if (opts.plan && opts.context) {
+      console.error("Use either --plan or --context, not both.");
+      process.exit(1);
+    }
+    const timeoutSec = parsePositiveInt(opts.runtimeTimeout, 60);
+    const metadata = startDaemonPlan({
+      colonyRoot: opts.colony,
+      objective,
+      planFile: opts.plan,
+      contextText: opts.context,
+      runtimeTimeoutSec: timeoutSec,
+      skipRuntimeSmoke: opts.skipRuntimeSmoke,
+    });
+    console.log(`Daemon started: PID ${metadata.pid}`);
+    console.log(`Objective: ${metadata.objective}`);
+    console.log(`Out log:   ${metadata.outLog}`);
+    console.log(`Err log:   ${metadata.errLog}`);
+    console.log("Use 'termite-commander daemon status --colony .' to inspect runtime health.");
+  });
+
+daemonCommand
+  .command("status")
+  .description("Show daemon metadata and liveness")
+  .option("-c, --colony <path>", "Colony root directory", process.cwd())
+  .action((opts: { colony: string }) => {
+    const metadata = readDaemonMetadata(opts.colony);
+    if (!metadata) {
+      console.log("No daemon metadata found.");
+      return;
+    }
+    const alive = isProcessAlive(metadata.pid);
+    console.log(`Daemon: ${alive ? "RUNNING" : "STALE"}`);
+    console.log(`  PID: ${metadata.pid}`);
+    console.log(`  Started: ${metadata.startedAt}`);
+    console.log(`  Objective: ${metadata.objective}`);
+    console.log(`  Out log: ${metadata.outLog}`);
+    console.log(`  Err log: ${metadata.errLog}`);
+
+    const lockData = getCommanderLockData(opts.colony);
+    if (lockData) {
+      const commanderAlive = isProcessAlive(lockData.pid);
+      console.log(`Commander lock: ${commanderAlive ? "RUNNING" : "STALE"} (pid=${lockData.pid})`);
+    } else {
+      console.log("Commander lock: not found");
+    }
+  });
+
+daemonCommand
+  .command("stop")
+  .description("Stop daemon + commander runtime")
+  .option("-c, --colony <path>", "Colony root directory", process.cwd())
+  .option("--force", "Force cleanup lock/status and orphan daemon pid", false)
+  .action((opts: { colony: string; force: boolean }) => {
+    const metadata = readDaemonMetadata(opts.colony);
+    if (metadata && isProcessAlive(metadata.pid)) {
+      console.log(`Stopping daemon launcher process (PID ${metadata.pid})...`);
+      try {
+        process.kill(metadata.pid, "SIGTERM");
+      } catch {}
+    }
+    stopCommanderProcess(opts.colony, opts.force);
+  });
+
+program
+  .command("dashboard")
+  .description("Open dashboard monitor (auto | tui | watch)")
+  .option("-c, --colony <path>", "Colony root directory", process.cwd())
+  .option("--mode <mode>", "Dashboard mode: auto | tui | watch | off", "auto")
+  .option("-i, --interval <ms>", "Refresh interval in ms (watch mode)", "5000")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  termite-commander dashboard --colony . --mode auto
+  termite-commander dashboard --colony . --mode watch --interval 2000
+`
+  )
+  .action(async (opts: { colony: string; mode: string; interval: string }) => {
+    const mode = parseDashboardMode(opts.mode ?? "auto");
+    const interval = parsePositiveInt(opts.interval, 5000);
+    await launchDashboard(opts.colony, mode, {
+      intervalMs: interval,
+      announce: mode !== "off",
+    });
+  });
+
 program
   .command("watch")
   .description("Watch colony status in real-time")
@@ -1190,19 +1650,41 @@ Example:
 `
   )
   .action(async (opts: { colony: string; interval: string }) => {
-    const bridge = new SignalBridge(opts.colony);
-    const interval = parseInt(opts.interval, 10);
+    const interval = parsePositiveInt(opts.interval, 5000);
+    await startWatchMonitor(opts.colony, interval);
+  });
 
-    const tick = async () => {
-      const status = await bridge.status();
-      const stall = await bridge.checkStall(5);
-      process.stdout.write(
-        `\r[${new Date().toISOString()}] total=${status.total} open=${status.open} claimed=${status.claimed} done=${status.done} stall=${stall.stalled}`,
-      );
-    };
-
-    await tick();
-    setInterval(tick, interval);
+program
+  .command("logs")
+  .description("Show recent commander logs for issue reporting")
+  .option("-c, --colony <path>", "Colony root directory", process.cwd())
+  .option("-n, --lines <count>", "Number of lines to print", "200")
+  .option("--source <name>", "Log source: auto | events | legacy", "auto")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  termite-commander logs --colony .
+  termite-commander logs --colony . --source events --lines 400
+`
+  )
+  .action((opts: { colony: string; lines: string; source: string }) => {
+    const source = (opts.source ?? "auto").toLowerCase().trim();
+    if (!["auto", "events", "legacy"].includes(source)) {
+      console.error("Invalid --source value. Use: auto | events | legacy");
+      process.exit(1);
+    }
+    const lineCount = parsePositiveInt(opts.lines, 200);
+    const logPath = getCommanderLogPath(opts.colony, source as "auto" | "events" | "legacy");
+    const lines = readTailLines(logPath, lineCount, 256 * 1024);
+    if (lines.length === 0) {
+      console.log(`No logs found at ${logPath}`);
+      return;
+    }
+    console.log(`# ${logPath}`);
+    for (const line of lines) {
+      console.log(line);
+    }
   });
 
 program
@@ -1219,75 +1701,7 @@ Example:
 `
   )
   .action(async (opts: { colony: string; force: boolean }) => {
-    const lockPath = join(opts.colony, "commander.lock");
-    const statusFilePath = join(opts.colony, ".commander-status.json");
-
-    let lockData: { pid: number; startedAt: string; objective: string } | null = null;
-    let statusPid: number | null = null;
-
-    if (existsSync(statusFilePath)) {
-      try {
-        const parsed = JSON.parse(readFileSync(statusFilePath, "utf-8"));
-        if (typeof parsed?.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0) {
-          statusPid = parsed.pid;
-        }
-      } catch {}
-    }
-
-    if (!existsSync(lockPath)) {
-      if (!opts.force) {
-        console.log("No commander.lock found. Commander is not running.");
-        return;
-      }
-      console.log("No commander.lock found. --force enabled: cleaning stale status files.");
-    } else {
-      try {
-        lockData = JSON.parse(readFileSync(lockPath, "utf-8"));
-      } catch {
-        if (!opts.force) {
-          console.error("Failed to parse commander.lock.");
-          return;
-        }
-        console.warn("Failed to parse commander.lock. --force enabled: continuing cleanup.");
-      }
-    }
-
-    if (lockData?.pid) {
-      console.log(`Stopping Commander (PID ${lockData.pid})...`);
-      try {
-        process.kill(lockData.pid, "SIGTERM");
-        console.log("SIGTERM sent.");
-      } catch (err: any) {
-        if (err.code === "ESRCH") {
-          console.log("Process not found (already exited).");
-        } else {
-          console.error(`Failed to kill process: ${err.message}`);
-        }
-      }
-    }
-
-    if (opts.force && statusPid && (!lockData || statusPid !== lockData.pid)) {
-      try {
-        process.kill(statusPid, "SIGTERM");
-        console.log(`Force cleanup: sent SIGTERM to orphan status PID ${statusPid}.`);
-      } catch {}
-    }
-
-    // Clean up lock file and stale status
-    try {
-      if (existsSync(lockPath)) {
-        unlinkSync(lockPath);
-        console.log("commander.lock removed.");
-      }
-    } catch {}
-    try {
-      if (existsSync(statusFilePath)) {
-        unlinkSync(statusFilePath);
-        console.log(".commander-status.json removed.");
-      }
-    } catch {}
-
-    console.log("Colony cleaned up. Ready for next run.");
+    stopCommanderProcess(opts.colony, opts.force);
   });
 
 program
@@ -1343,8 +1757,10 @@ Examples:
   });
 
 if (process.argv.length <= 2) {
-  const { startTUI } = await import("./tui/index.js");
-  await startTUI(process.cwd());
+  await launchDashboard(process.cwd(), "auto", {
+    intervalMs: 5000,
+    announce: false,
+  });
 } else {
   program.parse();
 }

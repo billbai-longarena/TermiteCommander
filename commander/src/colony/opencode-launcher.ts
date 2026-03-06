@@ -1,13 +1,10 @@
-import { spawn, execFile, type ChildProcess } from "node:child_process";
+import { spawn, execFile, type ChildProcess, type ExecFileOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, copyFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { promisify } from "node:util";
 import type { WorkerRuntime } from "../config/model-resolver.js";
 import { NativeCliProvider } from "./providers/native-cli-provider.js";
 import { OpenClawProvider } from "./providers/openclaw-provider.js";
-
-const execFileAsync = promisify(execFile);
 
 const TERMITE_WORKER_PROMPT = [
   "Execute the Termite Protocol worker loop.",
@@ -182,10 +179,60 @@ export class OpenCodeLauncher {
     return this.checkRuntime("opencode");
   }
 
+  private execFileWithClosedStdin(
+    command: string,
+    args: string[],
+    options: ExecFileOptions,
+  ): Promise<{ stdout: string; stderr: string }> {
+    return new Promise((resolvePromise, rejectPromise) => {
+      const child = execFile(command, args, options, (err, stdout, stderr) => {
+        if (err) {
+          (err as any).stdout = stdout;
+          (err as any).stderr = stderr;
+          rejectPromise(err);
+          return;
+        }
+        resolvePromise({
+          stdout: (stdout ?? "").toString(),
+          stderr: (stderr ?? "").toString(),
+        });
+      });
+
+      // Ensure non-interactive CLI probes receive EOF immediately.
+      try {
+        child.stdin?.end();
+      } catch {
+        // ignore stdin close errors
+      }
+    });
+  }
+
+  private buildProbeFailureDetail(err: any, timeoutMs: number): string {
+    const timedOut =
+      err?.killed === true ||
+      err?.signal === "SIGTERM" ||
+      /timed out/i.test(String(err?.message ?? ""));
+    if (timedOut) {
+      return (
+        `Smoke test timed out after ${Math.floor(timeoutMs / 1000)}s. ` +
+        "The runtime may still be healthy in interactive mode; retry with a larger --runtime-timeout."
+      );
+    }
+
+    const tags: string[] = [];
+    if (typeof err?.code !== "undefined") tags.push(`code=${String(err.code)}`);
+    if (typeof err?.signal === "string" && err.signal) tags.push(`signal=${err.signal}`);
+    const message = String(err?.message ?? "Smoke test failed.");
+    return tags.length > 0 ? `${message} (${tags.join(", ")})` : message;
+  }
+
   async checkRuntime(runtime: WorkerRuntime): Promise<boolean> {
     const binary = RUNTIME_BINARIES[runtime];
     try {
-      await execFileAsync(binary, ["--version"], { timeout: 5000 });
+      await this.execFileWithClosedStdin(binary, ["--version"], {
+        timeout: 5000,
+        maxBuffer: 256 * 1024,
+      });
       return true;
     } catch {
       return false;
@@ -245,6 +292,7 @@ export class OpenCodeLauncher {
   ): Promise<RuntimeSmokeProbe> {
     const prompt = "Reply with exactly: OK";
     const workspace = resolve(this.config.colonyRoot);
+    const effectiveTimeoutMs = runtime === "opencode" ? Math.max(timeoutMs, 60_000) : timeoutMs;
 
     const runExecFile = async (
       command: string,
@@ -264,34 +312,36 @@ export class OpenCodeLauncher {
         };
       }
       try {
-        const result = await execFileAsync(command, args, { timeout: timeoutMs }) as
-          | { stdout?: string | Buffer; stderr?: string | Buffer }
-          | string
-          | Buffer;
-        const stdout =
-          typeof result === "string" || Buffer.isBuffer(result)
-            ? result
-            : (result.stdout ?? "");
-        const stderr =
-          typeof result === "string" || Buffer.isBuffer(result)
-            ? ""
-            : (result.stderr ?? "");
+        const result = await this.execFileWithClosedStdin(command, args, {
+          cwd: workspace,
+          timeout: effectiveTimeoutMs,
+          maxBuffer: 8 * 1024 * 1024,
+          env: {
+            ...process.env,
+            CI: process.env.CI ?? "1",
+            TERM: process.env.TERM ?? "dumb",
+          },
+        });
         return {
           runtime,
           model,
           ok: true,
           skipped: false,
-          detail: "Smoke test passed.",
-          stdout: stdout.toString().trim(),
-          stderr: stderr.toString().trim(),
+          detail:
+            effectiveTimeoutMs !== timeoutMs
+              ? `Smoke test passed (timeout auto-raised to ${Math.floor(effectiveTimeoutMs / 1000)}s for ${runtime}).`
+              : "Smoke test passed.",
+          stdout: result.stdout.toString().trim(),
+          stderr: result.stderr.toString().trim(),
         };
       } catch (err: any) {
+        const detail = this.buildProbeFailureDetail(err, effectiveTimeoutMs);
         return {
           runtime,
           model,
           ok: false,
           skipped: false,
-          detail: err?.message ?? "Smoke test failed.",
+          detail,
           stdout: (err?.stdout ?? "").toString().trim(),
           stderr: (err?.stderr ?? "").toString().trim(),
         };

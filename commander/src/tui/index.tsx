@@ -3,10 +3,10 @@ import { render } from "ink";
 import { App } from "./App.js";
 
 export async function startTUI(colonyRoot: string): Promise<void> {
-  if (!process.stdin.isTTY) {
+  if (!process.stdout.isTTY) {
     console.error(
-      "termite-commander TUI requires an interactive terminal.\n" +
-        "Use 'termite-commander plan <objective> --colony .' for non-interactive mode.",
+      "termite-commander TUI requires a TTY-enabled stdout terminal.\n" +
+        "Use 'termite-commander dashboard --mode watch --colony .' for non-TUI mode.",
     );
     process.exit(1);
   }

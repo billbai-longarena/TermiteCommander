@@ -13,12 +13,12 @@ fi
 if commander_is_running "$COLONY_ROOT"; then
   STATUS_FILE="$COLONY_ROOT/.commander-status.json"
   if [ -f "$STATUS_FILE" ]; then
-    OBJECTIVE=$(grep -o '"objective":"[^"]*"' "$STATUS_FILE" | head -1 | sed 's/"objective":"//;s/"$//')
-    TOTAL=$(grep -o '"total":[0-9]*' "$STATUS_FILE" | head -1 | grep -o '[0-9]*')
-    DONE=$(grep -o '"done":[0-9]*' "$STATUS_FILE" | head -1 | grep -o '[0-9]*')
-    ACTIVE=$(grep -o '"activeWorkers":[0-9]*' "$STATUS_FILE" | head -1 | grep -o '[0-9]*')
+    OBJECTIVE=$(grep -Eo '"objective"[[:space:]]*:[[:space:]]*"[^"]*"' "$STATUS_FILE" | head -1 | sed -E 's/.*:[[:space:]]*"//;s/"$//')
+    TOTAL=$(grep -Eo '"total"[[:space:]]*:[[:space:]]*[0-9]+' "$STATUS_FILE" | head -1 | grep -Eo '[0-9]+')
+    DONE=$(grep -Eo '"done"[[:space:]]*:[[:space:]]*[0-9]+' "$STATUS_FILE" | head -1 | grep -Eo '[0-9]+')
+    ACTIVE=$(grep -Eo '"activeWorkers"[[:space:]]*:[[:space:]]*[0-9]+' "$STATUS_FILE" | head -1 | grep -Eo '[0-9]+')
     echo "[Commander] Colony active. ${DONE:-0}/${TOTAL:-?} signals done. ${ACTIVE:-0} workers. Objective: ${OBJECTIVE:-unknown}"
-    echo "Use /commander for plan/status/stop/workers/resume commands."
+    echo "Use /commander for plan/status/stop/workers/resume commands, or run 'termite-commander dashboard --mode auto'."
   else
     echo "[Commander] Colony active (no status snapshot yet)."
   fi

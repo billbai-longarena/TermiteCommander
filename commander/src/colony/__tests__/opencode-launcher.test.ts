@@ -82,7 +82,12 @@ describe("OpenCodeLauncher", () => {
   it("checks runtime availability via execFile --version", async () => {
     const launcher = createLauncher();
     await expect(launcher.checkRuntime("opencode")).resolves.toBe(true);
-    expect(execFileMock).toHaveBeenCalledWith("opencode", ["--version"], { timeout: 5000 }, expect.any(Function));
+    expect(execFileMock).toHaveBeenCalledWith(
+      "opencode",
+      ["--version"],
+      expect.objectContaining({ timeout: 5000 }),
+      expect.any(Function),
+    );
   });
 
   it("returns false when runtime check fails", async () => {
@@ -145,10 +150,11 @@ describe("OpenCodeLauncher", () => {
     const probe = await launcher.smokeTestRuntimeModel("opencode", "opencode/gpt-5-nano", 12000);
     expect(probe.ok).toBe(true);
     expect(probe.skipped).toBe(false);
+    expect(probe.detail).toContain("timeout auto-raised");
     expect(execFileMock).toHaveBeenCalledWith(
       "opencode",
       expect.arrayContaining(["run", "Reply with exactly: OK", "--format", "json", "--model", "opencode/gpt-5-nano"]),
-      { timeout: 12000 },
+      expect.objectContaining({ timeout: 60000 }),
       expect.any(Function),
     );
   });
@@ -159,6 +165,23 @@ describe("OpenCodeLauncher", () => {
     expect(probe.ok).toBe(true);
     expect(probe.skipped).toBe(true);
     expect(probe.detail).toContain("Skipped");
+  });
+
+  it("returns explicit timeout detail for runtime smoke probe timeout", async () => {
+    execFileMock.mockImplementationOnce((...args: any[]) => {
+      const cb = args[args.length - 1];
+      const err: any = new Error("Command failed: timed out");
+      err.killed = true;
+      err.signal = "SIGTERM";
+      cb(err, "", "");
+      return {};
+    });
+
+    const launcher = createLauncher([{ cli: "opencode", model: "opencode/gpt-5-nano", count: 1 }]);
+    const probe = await launcher.smokeTestRuntimeModel("opencode", "opencode/gpt-5-nano", 30000);
+    expect(probe.ok).toBe(false);
+    expect(probe.detail).toContain("timed out");
+    expect(probe.detail).toContain("60s");
   });
 
   it("launches opencode worker with title and model args", async () => {
