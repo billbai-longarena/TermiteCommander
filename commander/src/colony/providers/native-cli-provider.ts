@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import type { WorkerRuntime } from "../../config/model-resolver.js";
+import { extractModelName, type WorkerRuntime } from "../../config/model-resolver.js";
 import {
   ProviderError,
   type Provider,
@@ -46,6 +46,11 @@ export interface SessionSnapshot {
 }
 
 export class NativeCliProvider implements Provider {
+  private normalizeRuntimeModel(runtime: WorkerRuntime, model: string | undefined): string | undefined {
+    if (!model) return undefined;
+    return runtime === "claude" ? extractModelName(model) : model;
+  }
+
   handshake(): ProviderInfo {
     return {
       contractVersion: "1.0",
@@ -96,8 +101,9 @@ export class NativeCliProvider implements Provider {
 
     if (req.runtime === "opencode") {
       const args = ["run", req.prompt, "--format", "json", "--dir", workspace];
-      if (req.model) {
-        args.push("--model", req.model);
+      const runtimeModel = this.normalizeRuntimeModel(req.runtime, req.model);
+      if (runtimeModel) {
+        args.push("--model", runtimeModel);
       }
       if (req.sessionId) {
         args.push("--session", req.sessionId);
@@ -109,19 +115,21 @@ export class NativeCliProvider implements Provider {
 
     if (req.runtime === "claude") {
       const sessionId = req.sessionId ?? randomUUID();
+      const runtimeModel = this.normalizeRuntimeModel(req.runtime, req.model);
       const args = [
         "-p",
-        req.prompt,
         "--output-format",
         "stream-json",
+        "--verbose",
         "--permission-mode",
         "bypassPermissions",
         "--session-id",
         sessionId,
       ];
-      if (req.model) {
-        args.push("--model", req.model);
+      if (runtimeModel) {
+        args.push("--model", runtimeModel);
       }
+      args.push(req.prompt);
       return { command: "claude", args, preassignedSessionId: sessionId };
     }
 

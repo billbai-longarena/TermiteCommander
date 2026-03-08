@@ -288,6 +288,10 @@ termite-commander init --colony .
 # 默认: opencode + 3 个 Haiku 工人，Sonnet 做信号分解
 export TERMITE_WORKER_CLI=opencode
 
+# 按运行时选择默认工人模型：
+# - opencode / claude => claude-haiku-3-5
+# - codex            => gpt-5-codex
+
 # 推荐混合舰队（支持 opencode / claude / codex / openclaw）
 export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
 
@@ -344,6 +348,12 @@ termite-commander config import --from auto --apply --force
 termite-commander doctor --config --runtime
 ```
 
+`config import --from auto` 现在会按来源推荐低成本工人舰队：
+
+- Claude 配置 → 保留 `commander.model`，推荐 `3 x claude@claude-haiku-3-5`
+- Codex 配置 → 保留 `commander.model`，推荐 `3 x codex@gpt-5-codex`
+- OpenCode 配置 → 若已声明 `workers`，优先保留原舰队
+
 ```bash
 # 推荐主配置：termite.config.json
 # {
@@ -395,7 +405,7 @@ OpenClaw 说明：`openclaw agent` 必须具备路由上下文（`--agent` / `--
 ## CLI 参考
 
 ```
-termite-commander                      仪表盘自动模式（TTY 起 TUI，agent 会话可退化 watch）
+termite-commander                      TTY 下打开仪表盘；非 TTY 下输出快速引导
 termite-commander dashboard            显式仪表盘命令（auto/tui/watch/off）
 termite-commander init                 一键初始化（协议 + skills + 配置导入 + 诊断）
 termite-commander install              安装 skills 到项目

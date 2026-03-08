@@ -288,6 +288,10 @@ Design quality directly determines colony output quality. Invest time here.
 # Default: opencode + 3 Haiku workers, Sonnet for signal decomposition
 export TERMITE_WORKER_CLI=opencode
 
+# Runtime-aware default worker model:
+# - opencode / claude => claude-haiku-3-5
+# - codex            => gpt-5-codex
+
 # Recommended mixed fleet (supports opencode / claude / codex / openclaw):
 export TERMITE_WORKERS=opencode@haiku:2,claude@sonnet:1,codex@gpt-5-codex:1
 
@@ -344,6 +348,12 @@ termite-commander config import --from auto --apply --force
 termite-commander doctor --config --runtime
 ```
 
+`config import --from auto` now recommends a low-cost worker fleet by source:
+
+- Claude config → keep `commander.model`, recommend `3 x claude@claude-haiku-3-5`
+- Codex config → keep `commander.model`, recommend `3 x codex@gpt-5-codex`
+- OpenCode config → preserve explicit worker fleet when present
+
 ```bash
 # Recommended primary config: termite.config.json
 # {
@@ -395,7 +405,7 @@ OpenClaw note: `openclaw agent` requires routing context (`--agent` / `--to` / `
 ## CLI Reference
 
 ```
-termite-commander                      Dashboard auto mode (TUI on TTY, watch fallback in agent sessions)
+termite-commander                      Dashboard on TTY; quick guidance on non-TTY
 termite-commander dashboard            Explicit dashboard command (auto/tui/watch/off)
 termite-commander init                 One-shot init (protocol + skills + config bootstrap + doctor)
 termite-commander install              Install skills into project

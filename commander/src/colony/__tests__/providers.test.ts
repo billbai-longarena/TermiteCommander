@@ -39,6 +39,10 @@ describe("provider contract v1", () => {
 
     expect(claude.command).toBe("claude");
     expect(claude.args).toContain("--session-id");
+    expect(claude.args).toContain("--verbose");
+    expect(claude.args).toContain("claude-sonnet-4-5");
+    expect(claude.args).not.toContain("anthropic/claude-sonnet-4-5");
+    expect(claude.args[claude.args.length - 1]).toBe("hello");
     expect(claude.preassignedSessionId).toBeTruthy();
   });
 

@@ -36,6 +36,25 @@ export interface MergeResult {
   unchanged: string[];
 }
 
+const IMPORTED_LOW_COST_WORKER_COUNT = 3;
+
+function buildLowCostWorkerFleet(
+  runtime: WorkerRuntime,
+  workerModel: string,
+): NonNullable<TermiteConfig["commander"]>["workers"] {
+  return [{ cli: runtime, model: workerModel, count: IMPORTED_LOW_COST_WORKER_COUNT }];
+}
+
+function buildRecommendedWorkerModel(
+  runtime: Extract<WorkerRuntime, "claude" | "codex">,
+  providerHint?: string,
+): string {
+  if (runtime === "claude") {
+    return normalizeImportedModel("claude-haiku-3-5", "anthropic") ?? "anthropic/claude-haiku-3-5";
+  }
+  return normalizeImportedModel("gpt-5-codex", providerHint) ?? "gpt-5-codex";
+}
+
 function stripJsoncComments(text: string): string {
   let result = "";
   let i = 0;
@@ -382,9 +401,12 @@ function importFromClaude(colonyRoot: string): ExternalImportResult {
     level: "info",
     message: `Imported commander.model from Claude config ${path}.`,
   });
+  const workerModel = buildRecommendedWorkerModel("claude", "anthropic");
   diagnostics.push({
     level: "info",
-    message: "Inferred worker defaults from Claude source (default_worker_cli=claude).",
+    message:
+      `Recommended low-cost worker fleet from Claude source ` +
+      `(${IMPORTED_LOW_COST_WORKER_COUNT} x claude@${workerModel}).`,
   });
   return {
     source: "claude",
@@ -395,8 +417,8 @@ function importFromClaude(colonyRoot: string): ExternalImportResult {
       commander: {
         model,
         default_worker_cli: "claude",
-        default_worker_model: model,
-        workers: [{ cli: "claude", model, count: 1 }],
+        default_worker_model: workerModel,
+        workers: buildLowCostWorkerFleet("claude", workerModel),
       },
     },
     diagnostics,
@@ -478,9 +500,12 @@ function importFromCodex(colonyRoot: string): ExternalImportResult {
     level: "info",
     message: `Imported commander.model from Codex config ${path}.`,
   });
+  const workerModel = buildRecommendedWorkerModel("codex", providerHint ?? model);
   diagnostics.push({
     level: "info",
-    message: "Inferred worker defaults from Codex source (default_worker_cli=codex).",
+    message:
+      `Recommended low-cost worker fleet from Codex source ` +
+      `(${IMPORTED_LOW_COST_WORKER_COUNT} x codex@${workerModel}).`,
   });
   return {
     source: "codex",
@@ -491,8 +516,8 @@ function importFromCodex(colonyRoot: string): ExternalImportResult {
       commander: {
         model,
         default_worker_cli: "codex",
-        default_worker_model: model,
-        workers: [{ cli: "codex", model, count: 1 }],
+        default_worker_model: workerModel,
+        workers: buildLowCostWorkerFleet("codex", workerModel),
       },
     },
     diagnostics,

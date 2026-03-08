@@ -167,6 +167,30 @@ describe("OpenCodeLauncher", () => {
     expect(probe.detail).toContain("Skipped");
   });
 
+  it("runs claude runtime smoke test with verbose stream-json args", async () => {
+    const launcher = createLauncher([{ cli: "claude", model: "anthropic/claude-sonnet-4-5", count: 1 }]);
+    const probe = await launcher.smokeTestRuntimeModel("claude", "anthropic/claude-sonnet-4-5", 12000);
+
+    expect(probe.ok).toBe(true);
+    expect(probe.skipped).toBe(false);
+    expect(execFileMock).toHaveBeenCalledWith(
+      "claude",
+      expect.arrayContaining([
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--model",
+        "claude-sonnet-4-5",
+        "Reply with exactly: OK",
+      ]),
+      expect.objectContaining({ timeout: 12000 }),
+      expect.any(Function),
+    );
+    const args = execFileMock.mock.calls[0][1] as string[];
+    expect(args[args.length - 1]).toBe("Reply with exactly: OK");
+  });
+
   it("returns explicit timeout detail for runtime smoke probe timeout", async () => {
     execFileMock.mockImplementationOnce((...args: any[]) => {
       const cb = args[args.length - 1];
@@ -226,8 +250,12 @@ describe("OpenCodeLauncher", () => {
     expect(command).toBe("claude");
     expect(worker.sessionId).toBe("uuid-fixed-123");
     expect(args).toContain("--session-id");
+    expect(args).toContain("--verbose");
     expect(args[args.indexOf("--session-id") + 1]).toBe("uuid-fixed-123");
     expect(args).toContain("--model");
+    expect(args).toContain("claude-sonnet-4-5");
+    expect(args).not.toContain("anthropic/claude-sonnet-4-5");
+    expect(args[args.length - 1]).toBeTruthy();
   });
 
   it("launches codex worker and resumes existing codex session on pulse", async () => {

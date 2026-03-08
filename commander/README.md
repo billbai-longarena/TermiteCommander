@@ -31,6 +31,11 @@ termite-commander plan "Build <objective>" --plan .termite/worker/PLAN.md --colo
 
 `init` performs: protocol install (if missing) + skills install + config bootstrap + doctor preflight.
 
+No command behavior:
+
+- TTY session: opens dashboard in `auto` mode
+- Non-TTY session: prints quick setup / monitoring guidance instead of blocking
+
 ## Requirements
 
 - Node.js >= 18
@@ -67,6 +72,12 @@ termite-commander config import --from auto --apply
 # Validate resolved config + provider credentials + worker runtime/model compatibility
 termite-commander doctor --config --runtime
 ```
+
+Import recommendations are source-aware:
+
+- Claude source → keep `commander.model`, recommend `3 x claude@claude-haiku-3-5`
+- Codex source → keep `commander.model`, recommend `3 x codex@gpt-5-codex`
+- OpenCode source → keep explicit `workers` when already configured
 
 ## Fleet Safety (Stop + Autostart Guard)
 

@@ -84,9 +84,9 @@ describe("importExternalConfig", () => {
     expect(result.selected?.source).toBe("claude");
     expect(result.selected?.recommended?.commander?.model).toBe("anthropic/claude-sonnet-4-5");
     expect(result.selected?.recommended?.commander?.default_worker_cli).toBe("claude");
-    expect(result.selected?.recommended?.commander?.default_worker_model).toBe("anthropic/claude-sonnet-4-5");
+    expect(result.selected?.recommended?.commander?.default_worker_model).toBe("anthropic/claude-haiku-3-5");
     expect(result.selected?.recommended?.commander?.workers).toEqual([
-      { cli: "claude", model: "anthropic/claude-sonnet-4-5", count: 1 },
+      { cli: "claude", model: "anthropic/claude-haiku-3-5", count: 3 },
     ]);
   });
 
@@ -108,7 +108,22 @@ model = "gpt-5-codex"
     expect(result.selected?.recommended?.commander?.default_worker_cli).toBe("codex");
     expect(result.selected?.recommended?.commander?.default_worker_model).toBe("openai/gpt-5-codex");
     expect(result.selected?.recommended?.commander?.workers).toEqual([
-      { cli: "codex", model: "openai/gpt-5-codex", count: 1 },
+      { cli: "codex", model: "openai/gpt-5-codex", count: 3 },
+    ]);
+  });
+
+  it("recommends provider-aware low-cost Codex workers when importing Azure config", () => {
+    mkdirSync(join(tempDir, ".codex"), { recursive: true });
+    writeFileSync(
+      join(tempDir, ".codex", "config.toml"),
+      `model_provider = "azure"\nmodel = "gpt-5.4"\n`,
+    );
+
+    const result = importExternalConfig(tempDir, "codex");
+    expect(result.selected?.recommended?.commander?.model).toBe("azure/gpt-5.4");
+    expect(result.selected?.recommended?.commander?.default_worker_model).toBe("azure/gpt-5-codex");
+    expect(result.selected?.recommended?.commander?.workers).toEqual([
+      { cli: "codex", model: "azure/gpt-5-codex", count: 3 },
     ]);
   });
 

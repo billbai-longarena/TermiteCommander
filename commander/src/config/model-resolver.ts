@@ -47,6 +47,13 @@ export interface ResolvedModels {
   issues: ModelResolutionIssues;
 }
 
+const DEFAULT_WORKER_MODEL_BY_RUNTIME: Record<WorkerRuntime, string> = {
+  opencode: "claude-haiku-3-5",
+  claude: "claude-haiku-3-5",
+  codex: "gpt-5-codex",
+  openclaw: "main",
+};
+
 interface WorkerConfigEntry {
   cli?: WorkerRuntime;
   model?: string;
@@ -79,6 +86,14 @@ export interface TermiteConfig {
 interface ConfigLookup<TConfig> {
   config: TConfig | null;
   path: string | null;
+}
+
+export interface ResolveModelSourcesOptions {
+  termiteConfig: TermiteConfig | null;
+  termitePath?: string | null;
+  opencodeConfig?: OpenCodeConfig | null;
+  opencodePath?: string | null;
+  env?: NodeJS.ProcessEnv;
 }
 
 // ---------------------------------------------------------------------------
@@ -387,8 +402,11 @@ export function readOpenCodeConfig(colonyRoot: string): OpenCodeConfig | null {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_WORKER_CLI: WorkerRuntime = "opencode";
-const DEFAULT_WORKER_MODEL = "claude-haiku-3-5";
 const DEFAULT_WORKER_COUNT = 3;
+
+function getDefaultWorkerModelForRuntime(runtime: WorkerRuntime): string {
+  return DEFAULT_WORKER_MODEL_BY_RUNTIME[runtime] ?? DEFAULT_WORKER_MODEL_BY_RUNTIME.opencode;
+}
 
 /**
  * Resolve model configuration from termite config, opencode.json, env vars, and defaults.
@@ -414,7 +432,7 @@ const DEFAULT_WORKER_COUNT = 3;
  *       > termite.config.json "default_worker_model"
  *       > opencode.json "small_model"
  *       > TERMITE_MODEL env
- *       > "claude-haiku-3-5"
+ *       > runtime-specific default (opencode/claude=claude-haiku-3-5, codex=gpt-5-codex, openclaw=main)
  *
  *   Workers:
  *     termite.config.json "commander.workers"
@@ -423,19 +441,17 @@ const DEFAULT_WORKER_COUNT = 3;
  *       > TERMITE_WORKERS env
  *       > 3x default worker
  */
-export function resolveModels(colonyRoot: string): ResolvedModels {
+export function resolveModelsFromSources(options: ResolveModelSourcesOptions): ResolvedModels {
   const issues: ModelResolutionIssues = {
     warnings: [],
     errors: [],
   };
 
-  const termiteLookup = readTermiteConfigWithPath(colonyRoot);
-  const termiteConfig = termiteLookup.config;
-  const termitePath = termiteLookup.path;
-
-  const opencodeLookup = readOpenCodeConfigWithPath(colonyRoot);
-  const opencodeConfig = opencodeLookup.config;
-  const opencodePath = opencodeLookup.path;
+  const termiteConfig = options.termiteConfig;
+  const termitePath = options.termitePath ?? null;
+  const opencodeConfig = options.opencodeConfig ?? null;
+  const opencodePath = options.opencodePath ?? null;
+  const env = options.env ?? process.env;
 
   // Commander model (required)
   let commanderModelRaw: string | undefined;
@@ -458,8 +474,8 @@ export function resolveModels(colonyRoot: string): ResolvedModels {
       source: "config",
       detail: `${opencodePath ?? "opencode.json"}: model`,
     };
-  } else if (asNonEmptyString(process.env.COMMANDER_MODEL)) {
-    commanderModelRaw = asNonEmptyString(process.env.COMMANDER_MODEL);
+  } else if (asNonEmptyString(env.COMMANDER_MODEL)) {
+    commanderModelRaw = asNonEmptyString(env.COMMANDER_MODEL);
     commanderModelResolution = {
       source: "env",
       detail: "COMMANDER_MODEL",
@@ -517,8 +533,8 @@ export function resolveModels(colonyRoot: string): ResolvedModels {
       source: "config",
       detail: `${opencodePath ?? "opencode.json"}: small_model_cli`,
     };
-  } else if (asNonEmptyString(process.env.TERMITE_WORKER_CLI)) {
-    defaultWorkerCliRaw = asNonEmptyString(process.env.TERMITE_WORKER_CLI)!;
+  } else if (asNonEmptyString(env.TERMITE_WORKER_CLI)) {
+    defaultWorkerCliRaw = asNonEmptyString(env.TERMITE_WORKER_CLI)!;
     defaultWorkerCliResolution = {
       source: "env",
       detail: "TERMITE_WORKER_CLI",
@@ -553,17 +569,17 @@ export function resolveModels(colonyRoot: string): ResolvedModels {
       source: "config",
       detail: `${opencodePath ?? "opencode.json"}: small_model`,
     };
-  } else if (asNonEmptyString(process.env.TERMITE_MODEL)) {
-    defaultWorkerModelRaw = asNonEmptyString(process.env.TERMITE_MODEL)!;
+  } else if (asNonEmptyString(env.TERMITE_MODEL)) {
+    defaultWorkerModelRaw = asNonEmptyString(env.TERMITE_MODEL)!;
     defaultWorkerResolution = {
       source: "env",
       detail: "TERMITE_MODEL",
     };
   } else {
-    defaultWorkerModelRaw = DEFAULT_WORKER_MODEL;
+    defaultWorkerModelRaw = getDefaultWorkerModelForRuntime(defaultWorkerCli);
     defaultWorkerResolution = {
       source: "default",
-      detail: DEFAULT_WORKER_MODEL,
+      detail: defaultWorkerModelRaw,
     };
   }
   const defaultWorkerModel = extractModelName(defaultWorkerModelRaw);
@@ -575,7 +591,7 @@ export function resolveModels(colonyRoot: string): ResolvedModels {
   const termiteCommanderWorkers = termiteConfig?.commander?.workers;
   const termiteWorkers = termiteConfig?.workers;
   const opencodeWorkers = opencodeConfig?.commander?.workers;
-  const workersEnv = asNonEmptyString(process.env.TERMITE_WORKERS);
+  const workersEnv = asNonEmptyString(env.TERMITE_WORKERS);
 
   if (Array.isArray(termiteCommanderWorkers) && termiteCommanderWorkers.length > 0) {
     workers = normalizeWorkerConfigEntries(
@@ -652,6 +668,19 @@ export function resolveModels(colonyRoot: string): ResolvedModels {
     },
     issues,
   };
+}
+
+export function resolveModels(colonyRoot: string): ResolvedModels {
+  const termiteLookup = readTermiteConfigWithPath(colonyRoot);
+  const opencodeLookup = readOpenCodeConfigWithPath(colonyRoot);
+
+  return resolveModelsFromSources({
+    termiteConfig: termiteLookup.config,
+    termitePath: termiteLookup.path,
+    opencodeConfig: opencodeLookup.config,
+    opencodePath: opencodeLookup.path,
+    env: process.env,
+  });
 }
 
 export function assertPlanningModelConfigured(models: ResolvedModels): void {

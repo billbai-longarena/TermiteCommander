@@ -19,8 +19,11 @@ import { spawn, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import {
   readTermiteConfigWithPath,
+  readOpenCodeConfigWithPath,
   resolveModels,
+  resolveModelsFromSources,
   extractProvider,
+  type TermiteConfig,
   type ResolvedModels,
   type WorkerRuntime,
 } from "./config/model-resolver.js";
@@ -67,13 +70,19 @@ function parseDashboardMode(value: string): DashboardMode {
 
 async function startWatchMonitor(colonyRoot: string, intervalMs: number): Promise<void> {
   const bridge = new SignalBridge(colonyRoot);
+  const interactive = Boolean(process.stdout.isTTY);
 
   const tick = async () => {
     const status = await bridge.status();
     const stall = await bridge.checkStall(5);
-    process.stdout.write(
-      `\r[${new Date().toISOString()}] total=${status.total} open=${status.open} claimed=${status.claimed} done=${status.done} stall=${stall.stalled}   `,
-    );
+    const line =
+      `[${new Date().toISOString()}] total=${status.total} open=${status.open} ` +
+      `claimed=${status.claimed} done=${status.done} stall=${stall.stalled}`;
+    if (interactive) {
+      process.stdout.write(`\r${line}   `);
+    } else {
+      process.stdout.write(`${line}\n`);
+    }
   };
 
   await tick();
@@ -91,8 +100,17 @@ async function launchDashboard(
 ): Promise<void> {
   if (mode === "off") return;
 
+  const bridge = new SignalBridge(colonyRoot);
+  if (!bridge.hasScripts()) {
+    if (!opts?.json) {
+      console.log("[commander] Colony is not initialized yet.");
+      printSetupGuidance(colonyRoot);
+    }
+    return;
+  }
+
   const stdoutTty = Boolean(process.stdout.isTTY);
-  const fallbackToWatch = mode === "watch" || (mode === "auto" && isAgentSession());
+  const fallbackToWatch = mode === "watch" || (mode === "auto" && !stdoutTty);
   const shouldTryTui = mode === "tui" || (mode === "auto" && stdoutTty);
   const intervalMs = opts?.intervalMs ?? 5000;
   const announce = opts?.announce ?? false;
@@ -123,6 +141,32 @@ async function launchDashboard(
 function parsePositiveInt(value: string, fallback: number): number {
   const parsed = parseInt(value, 10);
   return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
+}
+
+function getColonyArg(colonyRoot: string): string {
+  return resolve(colonyRoot) === resolve(process.cwd()) ? "." : colonyRoot;
+}
+
+function printSetupGuidance(colonyRoot: string): void {
+  const colonyArg = getColonyArg(colonyRoot);
+  console.log("Recommended first step:");
+  console.log(`  termite-commander init --colony ${colonyArg}`);
+  console.log("Then run:");
+  console.log(`  termite-commander plan \"<objective>\" --plan .termite/worker/PLAN.md --colony ${colonyArg} --run`);
+}
+
+function printNoArgsGuidance(colonyRoot: string): void {
+  const bridge = new SignalBridge(colonyRoot);
+  if (!bridge.hasScripts()) {
+    console.log("No command given and this project is not initialized.");
+    printSetupGuidance(colonyRoot);
+    return;
+  }
+
+  const colonyArg = getColonyArg(colonyRoot);
+  console.log("No command given.");
+  console.log(`  Snapshot: termite-commander status --colony ${colonyArg}`);
+  console.log(`  Live monitor: termite-commander dashboard --mode auto --colony ${colonyArg}`);
 }
 
 type WorkerCredentialState = "ok" | "fail" | "unknown";
@@ -668,6 +712,21 @@ function createLauncher(colonyRoot: string, resolved: ReturnType<typeof resolveM
   });
 }
 
+function resolveModelsForImportPreview(
+  colonyRoot: string,
+  termiteConfig: TermiteConfig | null,
+  termitePath: string | null,
+): ResolvedModels {
+  const opencodeLookup = readOpenCodeConfigWithPath(colonyRoot);
+  return resolveModelsFromSources({
+    termiteConfig,
+    termitePath,
+    opencodeConfig: opencodeLookup.config,
+    opencodePath: opencodeLookup.path,
+    env: process.env,
+  });
+}
+
 async function runWorkerRuntimePreflight(
   colonyRoot: string,
   resolved: ResolvedModels,
@@ -741,7 +800,7 @@ Quick Start (new project):
   3) termite-commander status --colony .
 
 Minimal Runtime Notes:
-  - No args: opens dashboard (auto mode: TUI if terminal supports it, otherwise watch in agent sessions).
+  - No args on TTY: opens dashboard. No args without TTY: prints quick guidance.
   - commander.model is required before planning.
   - plan --run auto-installs Termite Protocol if missing.
   - Install at least one worker CLI used by your config: opencode/claude/codex/openclaw.
@@ -782,6 +841,14 @@ Examples:
   }) => {
     const capture = startConsoleCapture(opts.colony);
     try {
+      const infoLog = (message: string) => {
+        if (opts.json) {
+          console.error(message);
+        } else {
+          console.log(message);
+        }
+      };
+      const warnLog = (message: string) => console.warn(message);
       const source = parseImportSource(opts.from);
       const timeoutMs = parsePositiveInt(opts.runtimeTimeout, 30) * 1000;
       const dashboardMode = parseDashboardMode(opts.dashboard ?? "auto");
@@ -791,14 +858,16 @@ Examples:
       const protocolResult = ensureTermiteProtocolInstalled({
         colonyRoot: opts.colony,
         skillSourceDir,
-        logger: (message) => {
-          if (!opts.json) console.log(message);
-        },
+        logger: infoLog,
+        stdioMode: opts.json ? "pipe" : "inherit",
       });
 
       const resolvedForInstall = resolveModels(opts.colony);
       const launcher = createLauncher(opts.colony, resolvedForInstall);
-      launcher.installSkills();
+      launcher.installSkills({
+        log: infoLog,
+        warn: warnLog,
+      });
       const setup = ensureWorkspaceBoundary(opts.colony);
       if (!opts.json && (setup.createdFiles.length > 0 || setup.createdDirs.length > 0 || setup.gitignoreUpdated)) {
         console.log(
@@ -859,7 +928,7 @@ Examples:
       };
 
       if (opts.json) {
-        console.log(JSON.stringify(report, null, 2));
+        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
       } else {
         console.log("\n=== INIT SUMMARY ===");
         console.log(`Protocol: ${protocolResult.installed ? `INSTALLED (${protocolResult.source})` : "ALREADY INSTALLED"}`);
@@ -1174,7 +1243,8 @@ Examples:
       }
       console.log(`Protocol: ${protocolInstalled ? "INSTALLED" : "MISSING"}`);
       if (!protocolInstalled) {
-        console.log("  Tip: run 'termite-commander plan <objective> --run' to auto-install protocol.");
+        console.log("  Tip: run 'termite-commander init --colony .' for full setup.");
+        console.log("  Auto-install-only path: 'termite-commander plan <objective> --run'.");
       }
       if (lockData) {
         console.log(`  Objective: ${lockData.objective}`);
@@ -1280,7 +1350,13 @@ Examples:
         writeTermiteConfig(targetPath, mergeResult.merged);
       }
 
-      const resolved = resolveModels(opts.colony);
+      const resolved = shouldWrite
+        ? resolveModels(opts.colony)
+        : resolveModelsForImportPreview(
+            opts.colony,
+            mergeResult?.merged ?? existingLookup.config,
+            mergeResult ? `${targetPath} (preview)` : existingLookup.path,
+          );
       const credentials = getCredentialStatus(resolved);
       const payload = {
         colony: opts.colony,
@@ -1361,16 +1437,17 @@ Examples:
         }
       }
 
+      const configLabel = opts.apply ? "Model" : "Preview";
       if (resolved.issues.errors.length > 0) {
-        console.log("Model config errors:");
+        console.log(`${configLabel} config errors:`);
         for (const error of resolved.issues.errors) {
           console.log(`  - ${error}`);
         }
       } else {
-        console.log("Model config health: OK");
+        console.log(`${configLabel} config health: OK`);
       }
       if (resolved.issues.warnings.length > 0) {
-        console.log("Model config warnings:");
+        console.log(`${configLabel} config warnings:`);
         for (const warning of resolved.issues.warnings) {
           console.log(`  - ${warning}`);
         }
@@ -2050,10 +2127,14 @@ Examples:
   });
 
 if (process.argv.length <= 2) {
-  await launchDashboard(process.cwd(), "auto", {
-    intervalMs: 5000,
-    announce: false,
-  });
+  if (process.stdout.isTTY) {
+    await launchDashboard(process.cwd(), "auto", {
+      intervalMs: 5000,
+      announce: false,
+    });
+  } else {
+    printNoArgsGuidance(process.cwd());
+  }
 } else {
   program.parse();
 }

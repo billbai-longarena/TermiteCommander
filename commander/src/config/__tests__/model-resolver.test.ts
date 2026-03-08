@@ -7,6 +7,7 @@ import {
   readOpenCodeConfig,
   readTermiteConfig,
   resolveModels,
+  resolveModelsFromSources,
   extractProvider,
   extractModelName,
   assertPlanningModelConfigured,
@@ -292,6 +293,17 @@ describe("resolveModels", () => {
     ]);
   });
 
+  it("uses runtime-aware default worker model for codex fleets", () => {
+    process.env.COMMANDER_MODEL = "openai/gpt-5.4";
+    process.env.TERMITE_WORKER_CLI = "codex";
+
+    const result = resolveModels(tempDir);
+    expect(result.defaultWorkerCli).toBe("codex");
+    expect(result.defaultWorkerModel).toBe("gpt-5-codex");
+    expect(result.workers).toEqual([{ cli: "codex", model: undefined, count: 3 }]);
+    expect(result.resolution.defaultWorkerModel.detail).toBe("gpt-5-codex");
+  });
+
   it("falls back to default workers when config workers are invalid", () => {
     writeFileSync(
       join(tempDir, "termite.config.json"),
@@ -306,6 +318,32 @@ describe("resolveModels", () => {
     const result = resolveModels(tempDir);
     expect(result.workers).toEqual([{ cli: "opencode", model: undefined, count: 3 }]);
     expect(result.issues.warnings.some((w) => w.includes("invalid count"))).toBe(true);
+  });
+
+  it("resolves previewed termite config without writing to disk", () => {
+    const result = resolveModelsFromSources({
+      termiteConfig: {
+        commander: {
+          model: "anthropic/claude-sonnet-4-5",
+          default_worker_cli: "claude",
+          default_worker_model: "anthropic/claude-haiku-3-5",
+          workers: [{ cli: "claude", model: "anthropic/claude-haiku-3-5", count: 2 }],
+        },
+      },
+      termitePath: join(tempDir, "termite.config.json (preview)"),
+      opencodeConfig: null,
+      opencodePath: null,
+      env: {},
+    });
+
+    expect(result.commanderModel).toBe("claude-sonnet-4-5");
+    expect(result.defaultWorkerCli).toBe("claude");
+    expect(result.defaultWorkerModel).toBe("claude-haiku-3-5");
+    expect(result.workers).toEqual([
+      { cli: "claude", model: "anthropic/claude-haiku-3-5", count: 2 },
+    ]);
+    expect(result.issues.errors).toEqual([]);
+    expect(result.resolution.commanderModel.detail).toContain("preview");
   });
 });
 

@@ -2,7 +2,7 @@ import { spawn, execFile, type ChildProcess, type ExecFileOptions } from "node:c
 import { randomUUID } from "node:crypto";
 import { existsSync, copyFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { WorkerRuntime } from "../config/model-resolver.js";
+import { extractModelName, type WorkerRuntime } from "../config/model-resolver.js";
 import { NativeCliProvider } from "./providers/native-cli-provider.js";
 import { OpenClawProvider } from "./providers/openclaw-provider.js";
 
@@ -56,6 +56,11 @@ export interface RuntimeSmokeProbe {
   stderr: string;
 }
 
+export interface InstallSkillsOptions {
+  log?: (message: string) => void;
+  warn?: (message: string) => void;
+}
+
 export class OpenCodeLauncher {
   private config: LauncherConfig;
   private workers: Map<string, OpenCodeWorker> = new Map();
@@ -81,7 +86,9 @@ export class OpenCodeLauncher {
     }
   }
 
-  installSkills(): void {
+  installSkills(options?: InstallSkillsOptions): void {
+    const log = options?.log ?? ((message: string) => console.log(message));
+    const warn = options?.warn ?? ((message: string) => console.warn(message));
     let installedCount = 0;
 
     // 1. Copy termite protocol skills -> .opencode/skill/termite/
@@ -108,9 +115,9 @@ export class OpenCodeLauncher {
       );
     }
     if (missingFiles.length > 0) {
-      console.warn(`[launcher] Warning: missing skill files: ${missingFiles.join(", ")}`);
+      warn(`[launcher] Warning: missing skill files: ${missingFiles.join(", ")}`);
     }
-    console.log(`[launcher] Installed ${installedCount} termite skills to ${termiteDest}`);
+    log(`[launcher] Installed ${installedCount} termite skills to ${termiteDest}`);
 
     const pluginsBase = resolve(this.config.skillSourceDir, "../../plugins");
 
@@ -119,10 +126,10 @@ export class OpenCodeLauncher {
     if (existsSync(opencodeSrc)) {
       const opencodeDest = join(this.config.colonyRoot, ".opencode", "skill", "commander");
       this.copyDirRecursive(opencodeSrc, opencodeDest);
-      console.log(`[launcher] Installed commander skill to ${opencodeDest}`);
+      log(`[launcher] Installed commander skill to ${opencodeDest}`);
       installedCount++;
     } else {
-      console.warn(`[launcher] Warning: OpenCode skill not found at ${opencodeSrc}`);
+      warn(`[launcher] Warning: OpenCode skill not found at ${opencodeSrc}`);
     }
 
     // 3. Copy Claude Code plugin -> .claude/plugins/termite-commander/
@@ -130,13 +137,13 @@ export class OpenCodeLauncher {
     if (existsSync(claudeCodeSrc)) {
       const claudeCodeDest = join(this.config.colonyRoot, ".claude", "plugins", "termite-commander");
       this.copyDirRecursive(claudeCodeSrc, claudeCodeDest);
-      console.log(`[launcher] Installed Claude Code plugin to ${claudeCodeDest}`);
+      log(`[launcher] Installed Claude Code plugin to ${claudeCodeDest}`);
       installedCount++;
     } else {
-      console.warn(`[launcher] Warning: Claude Code plugin not found at ${claudeCodeSrc}`);
+      warn(`[launcher] Warning: Claude Code plugin not found at ${claudeCodeSrc}`);
     }
 
-    console.log(`[launcher] Installation complete: ${installedCount} components installed`);
+    log(`[launcher] Installation complete: ${installedCount} components installed`);
   }
 
   async launchWorker(
@@ -355,17 +362,19 @@ export class OpenCodeLauncher {
     }
 
     if (runtime === "claude") {
+      const runtimeModel = model ? extractModelName(model) : null;
       const args = [
         "-p",
-        prompt,
         "--output-format",
         "stream-json",
+        "--verbose",
         "--permission-mode",
         "bypassPermissions",
         "--session-id",
         randomUUID(),
       ];
-      if (model) args.push("--model", model);
+      if (runtimeModel) args.push("--model", runtimeModel);
+      args.push(prompt);
       return runExecFile("claude", args);
     }
 

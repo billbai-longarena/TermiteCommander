@@ -1,11 +1,14 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+
+type ProtocolInstallStdioMode = "inherit" | "pipe";
 
 export interface ProtocolInstallOptions {
   colonyRoot: string;
   skillSourceDir: string;
   logger?: (message: string) => void;
+  stdioMode?: ProtocolInstallStdioMode;
 }
 
 export interface ProtocolInstallResult {
@@ -21,8 +24,50 @@ function logWithFallback(logger: ((message: string) => void) | undefined, messag
   console.log(message);
 }
 
+function emitBufferedLines(
+  logger: ((message: string) => void) | undefined,
+  output: string | Buffer | null | undefined,
+): void {
+  if (!logger || !output) return;
+  const text = output.toString();
+  for (const line of text.split(/\r?\n/)) {
+    if (line.trim().length > 0) {
+      logger(line);
+    }
+  }
+}
+
+function runInstallCommand(
+  command: string,
+  args: string[],
+  options: { logger?: (message: string) => void; stdioMode: ProtocolInstallStdioMode },
+): void {
+  if (options.stdioMode === "inherit") {
+    execFileSync(command, args, { stdio: "inherit" });
+    return;
+  }
+
+  const result = spawnSync(command, args, {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  emitBufferedLines(options.logger, result.stdout);
+  emitBufferedLines(options.logger, result.stderr);
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    const detail = `${result.stderr ?? result.stdout ?? ""}`.trim();
+    throw new Error(detail || `Command failed: ${command} ${args.join(" ")}`);
+  }
+}
+
 export function ensureTermiteProtocolInstalled(options: ProtocolInstallOptions): ProtocolInstallResult {
   const logger = options.logger;
+  const stdioMode = options.stdioMode ?? "inherit";
   const dbScript = join(options.colonyRoot, "scripts", "termite-db.sh");
 
   if (existsSync(dbScript)) {
@@ -36,7 +81,10 @@ export function ensureTermiteProtocolInstalled(options: ProtocolInstallOptions):
   const localInstall = join(options.skillSourceDir, "../../../TermiteProtocol/install.sh");
   if (existsSync(localInstall)) {
     logWithFallback(logger, "[commander] Using local TermiteProtocol/install.sh");
-    execFileSync("bash", [localInstall, options.colonyRoot], { stdio: "inherit" });
+    runInstallCommand("bash", [localInstall, options.colonyRoot], {
+      logger,
+      stdioMode,
+    });
     logWithFallback(logger, "[commander] Termite Protocol installed.");
     return { installed: true, source: "local-script" };
   }
@@ -45,7 +93,7 @@ export function ensureTermiteProtocolInstalled(options: ProtocolInstallOptions):
   logWithFallback(logger, "[commander] Cloning Termite Protocol from GitHub...");
   const tmpDir = join(options.colonyRoot, ".termite-install-tmp");
   try {
-    execFileSync(
+    runInstallCommand(
       "git",
       [
         "clone",
@@ -54,10 +102,11 @@ export function ensureTermiteProtocolInstalled(options: ProtocolInstallOptions):
         "https://github.com/billbai-longarena/Termite-Protocol.git",
         tmpDir,
       ],
-      { stdio: "inherit" },
+      { logger, stdioMode },
     );
-    execFileSync("bash", [join(tmpDir, "install.sh"), options.colonyRoot], {
-      stdio: "inherit",
+    runInstallCommand("bash", [join(tmpDir, "install.sh"), options.colonyRoot], {
+      logger,
+      stdioMode,
     });
     logWithFallback(logger, "[commander] Termite Protocol installed.");
     return { installed: true, source: "github-clone" };
