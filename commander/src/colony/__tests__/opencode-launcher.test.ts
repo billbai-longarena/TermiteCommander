@@ -191,6 +191,32 @@ describe("OpenCodeLauncher", () => {
     expect(args[args.length - 1]).toBe("Reply with exactly: OK");
   });
 
+  it("runs codex runtime smoke test with stripped model and compatible effort override", async () => {
+    const launcher = createLauncher([{ cli: "codex", model: "azure/gpt-5-codex", count: 1 }]);
+    const probe = await launcher.smokeTestRuntimeModel("codex", "azure/gpt-5-codex", 12000);
+
+    expect(probe.ok).toBe(true);
+    expect(probe.skipped).toBe(false);
+    expect(execFileMock).toHaveBeenCalledWith(
+      "codex",
+      expect.arrayContaining([
+        "exec",
+        "Reply with exactly: OK",
+        "--json",
+        "--full-auto",
+        "--skip-git-repo-check",
+        "-C",
+        resolve(colonyRoot),
+        "-m",
+        "gpt-5-codex",
+        "-c",
+        'model_reasoning_effort="high"',
+      ]),
+      expect.objectContaining({ timeout: 12000 }),
+      expect.any(Function),
+    );
+  });
+
   it("returns explicit timeout detail for runtime smoke probe timeout", async () => {
     execFileMock.mockImplementationOnce((...args: any[]) => {
       const cb = args[args.length - 1];
@@ -270,7 +296,9 @@ describe("OpenCodeLauncher", () => {
     expect(firstArgs).toContain("-C");
     expect(firstArgs[firstArgs.indexOf("-C") + 1]).toBe(resolve(colonyRoot));
     expect(firstArgs).toContain("-m");
-    expect(firstArgs[firstArgs.indexOf("-m") + 1]).toBe("openai/gpt-5-codex");
+    expect(firstArgs[firstArgs.indexOf("-m") + 1]).toBe("gpt-5-codex");
+    expect(firstArgs).toContain("-c");
+    expect(firstArgs).toContain('model_reasoning_effort="high"');
 
     worker.status = "idle";
     worker.sessionId = "codex-session-xyz";

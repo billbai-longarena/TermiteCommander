@@ -26,6 +26,17 @@ export interface StatusFileData {
   signals: { total: number; open: number; done: number };
   workers: WorkerData[];
   heartbeat: { activeWorkers: number; runningWorkers: number };
+  execution?: {
+    summary?: {
+      total: number;
+      awaitingApproval: number;
+      ready: number;
+      executed: number;
+      blocked: number;
+      byClass?: Record<string, number>;
+    };
+    actionStore?: string;
+  };
 }
 
 export function readLockFile(colonyRoot: string): LockData | null {

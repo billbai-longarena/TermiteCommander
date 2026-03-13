@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ProviderError } from "../providers/contract.js";
 import { NativeCliProvider } from "../providers/native-cli-provider.js";
 import { OpenClawProvider } from "../providers/openclaw-provider.js";
@@ -12,7 +15,7 @@ describe("provider contract v1", () => {
     expect(info.capabilities).toContain("session_resume");
   });
 
-  it("builds opencode and claude launch specs with expected args", () => {
+  it("builds opencode, claude, and codex launch specs with expected args", () => {
     const provider = new NativeCliProvider();
 
     const opencode = provider.buildStartSpec({
@@ -44,6 +47,22 @@ describe("provider contract v1", () => {
     expect(claude.args).not.toContain("anthropic/claude-sonnet-4-5");
     expect(claude.args[claude.args.length - 1]).toBe("hello");
     expect(claude.preassignedSessionId).toBeTruthy();
+
+    const codex = provider.buildStartSpec({
+      runtime: "codex",
+      workspace: "/tmp/work",
+      workerId: "worker-3",
+      prompt: "hello",
+      model: "azure/gpt-5-codex",
+      sessionId: null,
+    });
+
+    expect(codex.command).toBe("codex");
+    expect(codex.args[0]).toBe("exec");
+    expect(codex.args).toContain("-m");
+    expect(codex.args[codex.args.indexOf("-m") + 1]).toBe("gpt-5-codex");
+    expect(codex.args).toContain("-c");
+    expect(codex.args).toContain('model_reasoning_effort="high"');
   });
 
   it("extracts session and run id from formatted json output", () => {
@@ -59,6 +78,40 @@ describe("provider contract v1", () => {
 
     expect(snapshot.runId).toBe("run-abc-001");
     expect(snapshot.sessionId).toBe("sess-xyz-123");
+  });
+
+  it("disables configured codex MCP servers in non-interactive exec args", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "native-cli-home-"));
+    const previousHome = process.env.HOME;
+    try {
+      mkdirSync(join(tempHome, ".codex"), { recursive: true });
+      writeFileSync(
+        join(tempHome, ".codex", "config.toml"),
+        `[mcp_servers.unityMCP]
+url = "http://localhost:8080/mcp"
+`,
+      );
+      process.env.HOME = tempHome;
+
+      const provider = new NativeCliProvider();
+      const codex = provider.buildStartSpec({
+        runtime: "codex",
+        workspace: "/tmp/work",
+        workerId: "worker-4",
+        prompt: "hello",
+        model: "azure/gpt-5-codex",
+        sessionId: null,
+      });
+
+      expect(codex.args).toContain('mcp_servers.unityMCP.enabled=false');
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 
   it("rejects openclaw runtime for native-cli provider", () => {

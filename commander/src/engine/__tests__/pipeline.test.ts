@@ -4,6 +4,18 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Plan } from "../../colony/plan-writer.js";
 
+const internalExecution = {
+  adapter: "generic" as const,
+  executionClass: "internal" as const,
+  target: "workspace",
+  policy: {
+    status: "allowed" as const,
+    requiresApproval: false,
+    reviewRequired: false,
+    reasons: ["internal action is allowed"],
+  },
+};
+
 const callLLMMock = vi.fn();
 const assertPlanningModelConfiguredMock = vi.fn();
 const assertProviderCredentialsMock = vi.fn();
@@ -36,6 +48,7 @@ vi.mock("../../config/model-resolver.js", () => ({
       errors: [],
     },
   }),
+  readTermiteConfig: () => null,
   assertPlanningModelConfigured: (...args: unknown[]) =>
     assertPlanningModelConfiguredMock(...args),
 }));
@@ -65,17 +78,20 @@ describe("Pipeline", () => {
 
   it("falls back to a single signal when decomposition LLM fails", async () => {
     callLLMMock
-      .mockResolvedValueOnce("BUILD")
+      .mockResolvedValueOnce("RESEARCH")
       .mockRejectedValueOnce(new Error("network down"));
 
     const pipeline = createPipeline();
-    const plan = await pipeline.plan("Create hello world endpoint");
+    const plan = await pipeline.plan("Research top competitors in AI browser testing");
 
-    expect(plan.taskType).toBe("BUILD");
+    expect(plan.taskType).toBe("RESEARCH");
+    expect(plan.deliverableFormat).toBe("Report");
     expect(plan.signals).toHaveLength(1);
     expect(plan.signals[0].id).toBe("S-001");
     expect(plan.signals[0].parentId).toBeNull();
-    expect(plan.signals[0].title).toContain("Create hello world endpoint");
+    expect(plan.signals[0].type).toBe("RESEARCH");
+    expect(plan.signals[0].title).toContain("Research objective");
+    expect(plan.signals[0].execution.adapter).toBe("generic");
   });
 
   it("blocks planning when model config is invalid", () => {
@@ -88,11 +104,11 @@ describe("Pipeline", () => {
 
   it("remaps parentId correctly after signal reordering", async () => {
     callLLMMock
-      .mockResolvedValueOnce("BUILD")
+      .mockResolvedValueOnce("MARKET")
       .mockResolvedValueOnce(
         JSON.stringify([
           {
-            type: "HOLE",
+            type: "CONTENT",
             title: "Child task",
             weight: 80,
             source: "directive",
@@ -103,7 +119,7 @@ describe("Pipeline", () => {
             acceptanceCriteria: "Child completed",
           },
           {
-            type: "HOLE",
+            type: "CAMPAIGN",
             title: "Root task",
             weight: 90,
             source: "directive",
@@ -117,9 +133,10 @@ describe("Pipeline", () => {
       );
 
     const pipeline = createPipeline();
-    const plan = await pipeline.plan("Build feature");
+    const plan = await pipeline.plan("Prepare a launch campaign");
 
     expect(plan.signals).toHaveLength(2);
+    expect(plan.deliverableFormat).toBe("Content");
     expect(plan.signals[0]).toMatchObject({
       id: "S-001",
       title: "Root task",
@@ -156,6 +173,10 @@ describe("Pipeline", () => {
           weight: 80,
           parentId: null,
           status: "open",
+          module: "src/root",
+          nextHint: "Do root task",
+          acceptanceCriteria: "Root completed",
+          execution: internalExecution,
         },
         {
           id: "S-002",
@@ -164,6 +185,10 @@ describe("Pipeline", () => {
           weight: 75,
           parentId: "S-001",
           status: "open",
+          module: "src/child",
+          nextHint: "Do child task",
+          acceptanceCriteria: "Child completed",
+          execution: internalExecution,
         },
       ],
       qualityCriteria: "",
@@ -204,6 +229,10 @@ describe("Pipeline", () => {
           weight: 80,
           parentId: "S-999",
           status: "open",
+          module: "src/orphan",
+          nextHint: "Resolve orphan",
+          acceptanceCriteria: "Resolved",
+          execution: internalExecution,
         },
       ],
       qualityCriteria: "",
@@ -214,5 +243,36 @@ describe("Pipeline", () => {
       "Unable to resolve signal dependency chain",
     );
     expect(createSignalMock).not.toHaveBeenCalled();
+  });
+
+  it("maps iterate tasks to mixed deliverables", async () => {
+    callLLMMock
+      .mockResolvedValueOnce("ITERATE")
+      .mockResolvedValueOnce(
+        JSON.stringify([
+          {
+            type: "FEEDBACK",
+            title: "Cluster onboarding complaints",
+            weight: 82,
+            source: "directive",
+            parentId: null,
+            childHint: null,
+            module: "feedback/onboarding",
+            nextHint: "Summarize recurring complaints from support tickets.",
+            acceptanceCriteria: "Themes are grouped and prioritized.",
+          },
+        ]),
+      );
+
+    const pipeline = createPipeline();
+    const plan = await pipeline.plan("Review user complaints and propose onboarding improvements");
+
+    expect(plan.taskType).toBe("ITERATE");
+    expect(plan.deliverableFormat).toBe("Mixed");
+    expect(plan.signals[0]).toMatchObject({
+      type: "FEEDBACK",
+      title: "Cluster onboarding complaints",
+    });
+    expect(plan.signals[0].execution.adapter).toBe("support");
   });
 });

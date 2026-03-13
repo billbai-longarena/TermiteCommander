@@ -198,6 +198,7 @@ export class SignalBridge {
     childHint?: string;
     module?: string;
     nextHint?: string;
+    tags?: string[];
   }): Promise<ExecResult> {
     // Escape values at JS level to avoid bash injection
     const esc = (s: string) => s.replace(/'/g, "'\\''");
@@ -209,9 +210,10 @@ export class SignalBridge {
     const nextHint = esc(params.nextHint ?? "");
     const parentId = esc(params.parentId ?? "");
     const childHint = esc(params.childHint ?? "");
+    const tags = esc(JSON.stringify(params.tags ?? []));
     const depth = params.parentId ? "1" : "0";
 
-    const script = `${this.dbPreamble()} && ID=$(db_next_signal_id S) && NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ) && db_signal_create "$ID" '${type}' '${title}' 'open' '${weight}' '14' "$NOW" "$NOW" 'commander' '${module}' '[]' '${nextHint}' '0' '${source}' '${parentId}' '${childHint}' '${depth}' && echo "$ID"`;
+    const script = `${this.dbPreamble()} && ID=$(db_next_signal_id S) && NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ) && db_signal_create "$ID" '${type}' '${title}' 'open' '${weight}' '14' "$NOW" "$NOW" 'commander' '${module}' '${tags}' '${nextHint}' '0' '${source}' '${parentId}' '${childHint}' '${depth}' && echo "$ID"`;
 
     return this.exec("bash", ["-c", script]);
   }

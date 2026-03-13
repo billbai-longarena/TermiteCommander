@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import { spawn, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   readTermiteConfigWithPath,
   readOpenCodeConfigWithPath,
@@ -40,6 +41,7 @@ import { OpenCodeLauncher, type RuntimeSmokeProbe } from "./colony/opencode-laun
 import { ensureTermiteProtocolInstalled } from "./colony/protocol-installer.js";
 import { startConsoleCapture } from "./logging/capture.js";
 import { getCommanderLogPath, readTailLines } from "./logging/files.js";
+import { ExecutionCoordinator } from "./execution/coordinator.js";
 
 function detectPlatform(): "opencode" | "claude-code" | "unknown" {
   if (process.env.CLAUDE_PROJECT_DIR) return "claude-code";
@@ -634,6 +636,8 @@ function startDaemonPlan(params: {
   return metadata;
 }
 
+const BUNDLED_TERMITE_SKILL_DIR = fileURLToPath(new URL("../skills/termite/", import.meta.url));
+
 const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 );
@@ -705,7 +709,7 @@ function formatRuntimeProbeLabel(probe: RuntimeSmokeProbe): string {
 function createLauncher(colonyRoot: string, resolved: ReturnType<typeof resolveModels>): OpenCodeLauncher {
   return new OpenCodeLauncher({
     colonyRoot,
-    skillSourceDir: resolve(import.meta.dirname ?? ".", "../skills/termite"),
+    skillSourceDir: BUNDLED_TERMITE_SKILL_DIR,
     workerSpecs: resolved.workers,
     defaultWorkerCli: resolved.defaultWorkerCli,
     defaultWorkerModel: resolved.defaultWorkerModel,
@@ -853,7 +857,7 @@ Examples:
       const timeoutMs = parsePositiveInt(opts.runtimeTimeout, 30) * 1000;
       const dashboardMode = parseDashboardMode(opts.dashboard ?? "auto");
 
-      const skillSourceDir = resolve(import.meta.dirname ?? ".", "../skills/termite");
+      const skillSourceDir = BUNDLED_TERMITE_SKILL_DIR;
 
       const protocolResult = ensureTermiteProtocolInstalled({
         colonyRoot: opts.colony,
@@ -1024,7 +1028,7 @@ Example:
 `
   )
   .action(async (opts: { colony: string }) => {
-    const skillSourceDir = resolve(import.meta.dirname ?? ".", "../skills/termite");
+    const skillSourceDir = BUNDLED_TERMITE_SKILL_DIR;
     const resolved = resolveModels(opts.colony);
     const launcher = createLauncher(opts.colony, resolved);
 
@@ -1133,7 +1137,7 @@ Execution modes:
       const config: PipelineConfig = {
         colonyRoot: opts.colony,
         platform: detectPlatform(),
-        skillSourceDir: resolve(import.meta.dirname ?? ".", "../skills/termite"),
+        skillSourceDir: BUNDLED_TERMITE_SKILL_DIR,
       };
 
       const pipeline = new Pipeline(config);
@@ -1145,7 +1149,11 @@ Execution modes:
       console.log("\n=== PLAN ===");
       console.log(`Type: ${plan.taskType}`);
       console.log(`Signals: ${plan.signals.length}`);
-      plan.signals.forEach((s) => console.log(`  ${s.id} [${s.type}] ${s.title}`));
+      plan.signals.forEach((s) =>
+        console.log(
+          `  ${s.id} [${s.type}] ${s.title} -> ${s.execution.adapter}/${s.execution.executionClass} policy=${s.execution.policy.status}`,
+        ),
+      );
 
       if (opts.run) {
         console.log("\n[commander] Starting colony execution...");
@@ -1184,8 +1192,10 @@ Examples:
   )
   .action(async (opts: { colony: string; json: boolean }) => {
     const bridge = new SignalBridge(opts.colony);
+    const execution = new ExecutionCoordinator(opts.colony);
     const protocolInstalled = bridge.hasScripts();
     const status = await bridge.status();
+    const executionSummary = execution.summarize();
     const models = resolveModels(opts.colony);
     const workersLabel = models.workers
       .map((w) => `${w.cli}@${w.model ?? models.defaultWorkerModel} ×${w.count}`)
@@ -1223,6 +1233,10 @@ Examples:
               staleLock,
               heartbeatAgeSec,
               heartbeatStale,
+            },
+            execution: {
+              summary: statusFileData?.execution?.summary ?? executionSummary,
+              actionStore: statusFileData?.execution?.actionStore ?? execution.actionStorePath(),
             },
             models,
           },
@@ -1297,6 +1311,83 @@ Examples:
           }
         }
         console.log(`Updated: ${statusFileData.updatedAt}`);
+      }
+      const execSummary = statusFileData?.execution?.summary ?? executionSummary;
+      console.log(
+        `Execution: total=${execSummary.total} internal=${execSummary.byClass?.internal ?? 0} proposed=${execSummary.byClass?.proposed ?? 0} guarded=${execSummary.byClass?.["guarded-external"] ?? 0} awaitingApproval=${execSummary.awaitingApproval ?? 0} executed=${execSummary.executed ?? 0}`,
+      );
+      console.log(`Action Store: ${statusFileData?.execution?.actionStore ?? execution.actionStorePath()}`);
+    }
+  });
+
+program
+  .command("actions")
+  .description("List, approve, and apply execution actions")
+  .option("-c, --colony <path>", "Colony root directory", process.cwd())
+  .option("--json", "Output as JSON", false)
+  .option("--approve <ids>", "Comma-separated action IDs to approve")
+  .option("--approve-all", "Approve all awaiting-approval actions", false)
+  .option("--apply", "Apply approved or ready actions", false)
+  .option("--all", "Apply all approved/ready actions", false)
+  .addHelpText(
+    "after",
+    `
+Examples:
+  termite-commander actions --colony .
+  termite-commander actions --colony . --approve ACT-S-001
+  termite-commander actions --colony . --approve-all
+  termite-commander actions --colony . --apply --all
+`,
+  )
+  .action(async (opts: {
+    colony: string;
+    json: boolean;
+    approve?: string;
+    approveAll: boolean;
+    apply: boolean;
+    all: boolean;
+  }) => {
+    const coordinator = new ExecutionCoordinator(opts.colony);
+    const approveIds = opts.approve
+      ? opts.approve.split(",").map((item) => item.trim()).filter(Boolean)
+      : undefined;
+
+    if (approveIds || opts.approveAll) {
+      coordinator.approveActions(opts.approveAll ? undefined : approveIds);
+    }
+
+    if (opts.apply) {
+      await coordinator.applyActions(opts.all ? undefined : approveIds);
+    }
+
+    const actions = coordinator.listActions();
+    if (opts.json) {
+      console.log(JSON.stringify({
+        summary: coordinator.summarize(),
+        actions,
+      }, null, 2));
+      return;
+    }
+
+    if (actions.length === 0) {
+      console.log("No execution actions found.");
+      return;
+    }
+
+    const summary = coordinator.summarize();
+    console.log(
+      `Execution actions: total=${summary.total} awaitingApproval=${summary.awaitingApproval} ready=${summary.ready} executed=${summary.executed} blocked=${summary.blocked}`,
+    );
+    for (const action of actions) {
+      console.log(
+        `  ${action.id} signal=${action.signalId} adapter=${action.adapter} class=${action.executionClass} status=${action.status} target=${action.target}`,
+      );
+      console.log(`    ${action.summary}`);
+      if (action.proposalArtifactPath) {
+        console.log(`    artifact=${action.proposalArtifactPath}`);
+      }
+      if (action.result?.message) {
+        console.log(`    result=${action.result.message}`);
       }
     }
   });

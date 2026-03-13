@@ -1,6 +1,11 @@
 import { writeFileSync, unlinkSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { TaskClassifier } from "./classifier.js";
+import {
+  TaskClassifier,
+  deliverableFormatForTaskType,
+  type DeliverableFormat,
+  type TaskType,
+} from "./classifier.js";
 import { SignalDecomposer, type DecomposedSignal } from "./decomposer.js";
 import { SignalBridge } from "../colony/signal-bridge.js";
 import { PlanWriter, type Plan } from "../colony/plan-writer.js";
@@ -16,6 +21,7 @@ import {
 import { OpenCodeLauncher } from "../colony/opencode-launcher.js";
 import { ensureWorkspaceBoundary } from "../colony/workspace-boundary.js";
 import { ensureTermiteProtocolInstalled } from "../colony/protocol-installer.js";
+import { ExecutionCoordinator } from "../execution/coordinator.js";
 
 export interface PipelineConfig {
   colonyRoot: string;
@@ -30,12 +36,14 @@ export class Pipeline {
   private bridge: SignalBridge;
   private launcher: OpenCodeLauncher;
   private models: ResolvedModels;
+  private executionCoordinator: ExecutionCoordinator;
 
   constructor(config: PipelineConfig) {
     this.config = config;
     this.bridge = new SignalBridge(config.colonyRoot);
     this.models = resolveModels(config.colonyRoot);
     assertPlanningModelConfigured(this.models);
+    this.executionCoordinator = new ExecutionCoordinator(config.colonyRoot);
     this.logModelResolution();
     // Override llmConfig with resolved models
     this.config.llmConfig = configFromResolved(this.models);
@@ -96,6 +104,10 @@ export class Pipeline {
         activeWorkers: this.launcher.activeCount(),
         runningWorkers: this.launcher.runningCount(),
       },
+      execution: {
+        summary: this.executionCoordinator.summarize(plan),
+        actionStore: this.executionCoordinator.actionStorePath(),
+      },
     };
     writeFileSync(statusPath, JSON.stringify(data, null, 2), "utf-8");
   }
@@ -133,17 +145,72 @@ export class Pipeline {
     }
   }
 
-  private fallbackSignal(objective: string): DecomposedSignal {
+  private fallbackSignal(taskType: TaskType, objective: string): DecomposedSignal {
+    const fallbackByTaskType: Record<TaskType, Omit<DecomposedSignal, "source" | "parentId" | "childHint" | "weight"> & { weight: number }> = {
+      BUILD: {
+        type: "HOLE",
+        title: `Implement objective: ${objective.slice(0, 120)}`,
+        weight: 80,
+        module: "implementation",
+        nextHint: `Translate the objective into concrete code, documentation, and validation steps. Objective: ${objective}`,
+        acceptanceCriteria: "Relevant code or docs are updated and the completion checks are identified.",
+      },
+      RESEARCH: {
+        type: "RESEARCH",
+        title: `Research objective: ${objective.slice(0, 120)}`,
+        weight: 75,
+        module: "research",
+        nextHint: `Collect the key facts, comparisons, and sources required to answer the objective. Summarize the findings in a concise brief. Objective: ${objective}`,
+        acceptanceCriteria: "A concise findings brief exists, includes traceable sources, and ends with a conclusion.",
+      },
+      MARKET: {
+        type: "CONTENT",
+        title: `Draft go-to-market brief: ${objective.slice(0, 120)}`,
+        weight: 75,
+        module: "marketing",
+        nextHint: `Draft the core messaging, audience, channel, and success metric for this marketing objective. Keep the artifact ready for human review. Objective: ${objective}`,
+        acceptanceCriteria: "A marketing brief exists with target audience, messaging, channel, and measurable next step.",
+      },
+      SALES: {
+        type: "OUTREACH",
+        title: `Prepare sales outreach plan: ${objective.slice(0, 120)}`,
+        weight: 75,
+        module: "sales",
+        nextHint: `Prepare a sales-ready artifact for this objective, including target segment, value proposition, and follow-up structure. Keep it in draft form for review. Objective: ${objective}`,
+        acceptanceCriteria: "A sales draft exists with target segment, outreach structure, and clear review notes.",
+      },
+      OPERATE: {
+        type: "OPS",
+        title: `Operate objective: ${objective.slice(0, 120)}`,
+        weight: 75,
+        module: "operations",
+        nextHint: `Translate the objective into a concrete operational checklist, owner-ready notes, and the KPI or queue to inspect. Objective: ${objective}`,
+        acceptanceCriteria: "An operational brief exists with actions, owner context, and KPI or queue references.",
+      },
+      ITERATE: {
+        type: "FEEDBACK",
+        title: `Synthesize iteration inputs: ${objective.slice(0, 120)}`,
+        weight: 75,
+        module: "iteration",
+        nextHint: `Summarize the relevant feedback or performance signals, identify the top problems, and propose the next change to test. Objective: ${objective}`,
+        acceptanceCriteria: "A prioritized iteration brief exists with evidence, recommended next change, and success metric.",
+      },
+      HYBRID: {
+        type: "REPORT",
+        title: `Create hybrid execution brief: ${objective.slice(0, 120)}`,
+        weight: 75,
+        module: "hybrid",
+        nextHint: `Break the objective into the smallest cross-domain actions, note dependencies, and produce an execution brief that another worker can follow. Objective: ${objective}`,
+        acceptanceCriteria: "An execution brief exists with prioritized actions, dependencies, and completion criteria.",
+      },
+    };
+
+    const fallback = fallbackByTaskType[taskType];
     return {
-      type: "HOLE",
-      title: `Implement objective: ${objective.slice(0, 120)}`,
-      weight: 80,
+      ...fallback,
       source: "directive",
       parentId: null,
       childHint: null,
-      module: "",
-      nextHint: `Translate the objective into concrete code changes and tests. Objective: ${objective}`,
-      acceptanceCriteria: "Code changes are implemented and tests pass.",
     };
   }
 
@@ -180,7 +247,7 @@ export class Pipeline {
     } catch (err: any) {
       degradedDecomposition = true;
       console.error(`[commander] Decomposition failed, using fallback signal: ${err?.message ?? "unknown error"}`);
-      signalsJson = JSON.stringify([this.fallbackSignal(objective)]);
+      signalsJson = JSON.stringify([this.fallbackSignal(taskType, objective)]);
     }
 
     let signals: DecomposedSignal[] = [];
@@ -193,7 +260,7 @@ export class Pipeline {
     } catch {
       degradedDecomposition = true;
       console.error("[commander] Failed to parse signals JSON, using fallback signal");
-      signals = [this.fallbackSignal(objective)];
+      signals = [this.fallbackSignal(taskType, objective)];
     }
 
     const { valid, errors } = SignalDecomposer.validateTree(signals);
@@ -238,9 +305,13 @@ export class Pipeline {
         weight: s.weight,
         parentId: s.parentId ? (newIdByOriginalId.get(s.parentId) ?? null) : null,
         status: "open",
+        module: s.module,
+        nextHint: s.nextHint,
+        acceptanceCriteria: s.acceptanceCriteria,
+        execution: this.executionCoordinator.resolveSignalExecution(taskType, s),
       })),
       qualityCriteria: "",
-      deliverableFormat: taskType === "BUILD" ? "Code + tests" : "Analysis + code",
+      deliverableFormat: deliverableFormatForTaskType(taskType) as DeliverableFormat,
     };
 
     return plan;
@@ -249,6 +320,14 @@ export class Pipeline {
   async dispatch(plan: Plan): Promise<void> {
     console.log("[commander] Writing PLAN.md...");
     await PlanWriter.writeToDisk(plan, this.config.colonyRoot);
+    const preparedActions = await this.executionCoordinator.preparePlan(plan);
+    const actionSummary = this.executionCoordinator.summarize(plan);
+    console.log(
+      `[commander] Execution routing: total=${actionSummary.total} internal=${actionSummary.byClass.internal} proposed=${actionSummary.byClass.proposed} guarded=${actionSummary.byClass["guarded-external"]} awaitingApproval=${actionSummary.awaitingApproval}`,
+    );
+    if (preparedActions.some((action) => action.status === "blocked")) {
+      console.warn("[commander] Some execution actions are blocked by policy. Review .termite/execution/actions.json.");
+    }
 
     console.log(`[commander] Creating ${plan.signals.length} directive signals...`);
     const pending = [...plan.signals];
@@ -271,8 +350,15 @@ export class Pipeline {
           weight: signal.weight,
           source: "directive",
           parentId: parentDbId,
-          module: "",
-          nextHint: "",
+          module: signal.module,
+          nextHint: signal.nextHint,
+          childHint:
+            `acceptance=${signal.acceptanceCriteria} | adapter=${signal.execution.adapter} | class=${signal.execution.executionClass} | policy=${signal.execution.policy.status}`,
+          tags: [
+            `adapter:${signal.execution.adapter}`,
+            `execution:${signal.execution.executionClass}`,
+            `policy:${signal.execution.policy.status}`,
+          ],
         });
 
         if (result.exitCode !== 0) {
@@ -295,6 +381,7 @@ export class Pipeline {
         throw new Error(`Unable to resolve signal dependency chain: ${unresolved}`);
       }
     }
+    this.executionCoordinator.linkDispatchedSignals(dbIdByPlanId);
     console.log("[commander] Signals dispatched to colony.");
   }
 

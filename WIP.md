@@ -1,11 +1,26 @@
 # WIP — Termite Commander 开发交接
 
-**Last updated**: 2026-03-05
-**Session**: 健壮性评估 + OpenClaw 兼容性调研 + 白蚁协议互补集成设计
+**Last updated**: 2026-03-09
+**Session**: Commander runtime 兼容修复 + TR1 宿主项目真机验证
 
 ---
 
 ## 本次会话完成的工作
+
+### 0. 2026-03-09 Commander runtime 兼容修复（已完成）
+- 修复打包资源路径：`commander/src/index.ts` 改为基于 `import.meta.url` 定位 `skills/termite`，不再依赖当前 cwd；从任意目录执行 `node .../dist/index.js init ...` 都能找到内置 skills/plugins
+- 修复 Codex worker/runtime 的模型透传：`commander/src/colony/providers/native-cli-provider.ts` 与 `commander/src/colony/opencode-launcher.ts` 现在会像 Claude 一样对 Codex 运行时剥离 provider 前缀；`azure/gpt-5-codex` 传给 `codex` CLI 时变成 `gpt-5-codex`
+- 修复 Codex runtime probe 兼容性：对 `codex exec` 统一追加 `-c model_reasoning_effort="high"`，规避用户全局 `~/.codex/config.toml` 中 `model_reasoning_effort = "xhigh"` 导致的 `unsupported_value`
+- 增加 Codex MCP 隔离：读取 `~/.codex/config.toml` 中的 `[mcp_servers.*]`，在 Commander 的 Codex 子进程里按命令级覆盖为 `enabled=false`，避免本机失效的 `unityMCP` 502 / UnexpectedContentType 让 `doctor --runtime` 和 `--run` 前置检查失败
+- 测试补充：
+  - `commander/src/colony/__tests__/providers.test.ts` 新增 Codex args 与 MCP-disable 覆盖
+  - `commander/src/colony/__tests__/opencode-launcher.test.ts` 新增 Codex smoke test，并更新 worker args 断言
+- 本机验证（真实宿主项目 `~/Desktop/OpenAgentEngine`）：
+  - `cd commander && npx vitest run src/colony/__tests__/providers.test.ts src/colony/__tests__/opencode-launcher.test.ts` ✅
+  - `cd commander && npm run build` ✅
+  - 从 **非 `commander/dist` 目录** 执行：`node /Users/bingbingbai/Desktop/TermiteCommander/commander/dist/index.js init --colony /Users/bingbingbai/Desktop/OpenAgentEngine --from codex --dashboard off` ✅
+  - `node /Users/bingbingbai/Desktop/TermiteCommander/commander/dist/index.js doctor --runtime --colony /Users/bingbingbai/Desktop/OpenAgentEngine` ✅
+- 当前结论：Commander 在 `OpenAgentEngine` 上的 `init` 与 `doctor --runtime` blocker 已清除，`plan --run` 的前置门槛已打通；本轮**未主动启动 live worker fleet**，因为当前宿主项目仍有真实 open signals，启动后会让 termite workers 直接 claim/修改/提交
 
 ### 1. Commander v1 TUI (已完成，后被 v2 替换)
 - 实现了 Ink/React 交互式 TUI (REPL + Dashboard + Detail Views)

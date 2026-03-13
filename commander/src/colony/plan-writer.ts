@@ -1,3 +1,6 @@
+import type { TaskType } from "../engine/classifier.js";
+import type { SignalExecutionMetadata } from "../execution/contract.js";
+
 export interface SignalEntry {
   id: string;
   type: string;
@@ -5,11 +8,15 @@ export interface SignalEntry {
   weight: number;
   parentId: string | null;
   status: string;
+  module: string;
+  nextHint: string;
+  acceptanceCriteria: string;
+  execution: SignalExecutionMetadata;
 }
 
 export interface Plan {
   objective: string;
-  taskType: "BUILD" | "HYBRID";
+  taskType: TaskType;
   audience: string;
   researchFindings: string;
   userScenarios: string;
@@ -57,8 +64,16 @@ export class PlanWriter {
 
     for (const root of roots) {
       lines.push(`- **${root.id}** [${root.type}] ${root.title} (weight: ${root.weight}, status: ${root.status})`);
+      lines.push(`  - module: ${root.module || "-"}`);
+      lines.push(
+        `  - execution: adapter=${root.execution.adapter} class=${root.execution.executionClass} policy=${root.execution.policy.status} target=${root.execution.target}`,
+      );
       for (const child of children.filter((c) => c.parentId === root.id)) {
         lines.push(`  - **${child.id}** [${child.type}] ${child.title} (weight: ${child.weight}, status: ${child.status})`);
+        lines.push(`    - module: ${child.module || "-"}`);
+        lines.push(
+          `    - execution: adapter=${child.execution.adapter} class=${child.execution.executionClass} policy=${child.execution.policy.status} target=${child.execution.target}`,
+        );
       }
     }
     lines.push("");

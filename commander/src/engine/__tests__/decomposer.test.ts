@@ -53,4 +53,35 @@ describe("SignalDecomposer", () => {
     expect(ordered[0].title).toBe("A is root");
     expect(ordered[1].title).toBe("B depends on A");
   });
+
+  it("should support expanded non-code signal types", () => {
+    const signal: DecomposedSignal = {
+      type: "CONTENT",
+      title: "Draft launch page copy",
+      weight: 78,
+      source: "directive",
+      parentId: null,
+      childHint: null,
+      module: "marketing/product-hunt",
+      nextHint: "Write a launch page draft for technical founders.",
+      acceptanceCriteria: "Draft includes tagline, bullets, and proof points.",
+    };
+
+    expect(SignalDecomposer.validate(signal)).toBe(true);
+  });
+
+  it("should include business-domain guidance in decomposition prompts", () => {
+    const prompt = SignalDecomposer.buildDecompositionPrompt(
+      "Prepare a Product Hunt launch plan and generate launch assets",
+      "MARKET",
+      "Audience: technical founders",
+    );
+
+    expect(prompt).toContain("CONTENT");
+    expect(prompt).toContain("OUTREACH");
+    expect(prompt).toContain("CAMPAIGN");
+    expect(prompt).toContain("Task-type guidance:");
+    expect(prompt).toContain("MARKET: prefer CONTENT / CAMPAIGN / REVIEW");
+    expect(prompt).toContain("GOOD non-code signal:");
+  });
 });
