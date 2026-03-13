@@ -2,8 +2,8 @@ import { spawn, execFile, type ChildProcess, type ExecFileOptions } from "node:c
 import { randomUUID } from "node:crypto";
 import { existsSync, copyFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { extractModelName, type WorkerRuntime } from "../config/model-resolver.js";
-import { NativeCliProvider } from "./providers/native-cli-provider.js";
+import { type WorkerRuntime } from "../config/model-resolver.js";
+import { NativeCliProvider, buildCodexExecArgs, normalizeNativeCliModel } from "./providers/native-cli-provider.js";
 import { OpenClawProvider } from "./providers/openclaw-provider.js";
 
 const TERMITE_WORKER_PROMPT = [
@@ -362,7 +362,7 @@ export class OpenCodeLauncher {
     }
 
     if (runtime === "claude") {
-      const runtimeModel = model ? extractModelName(model) : null;
+      const runtimeModel = normalizeNativeCliModel("claude", model ?? undefined) ?? null;
       const args = [
         "-p",
         "--output-format",
@@ -379,8 +379,12 @@ export class OpenCodeLauncher {
     }
 
     if (runtime === "codex") {
-      const args = ["exec", prompt, "--json", "--full-auto", "--skip-git-repo-check", "-C", workspace];
-      if (model) args.push("-m", model);
+      const args = buildCodexExecArgs({
+        workspace,
+        prompt,
+        model: model ?? undefined,
+        sessionId: null,
+      });
       return runExecFile("codex", args);
     }
 

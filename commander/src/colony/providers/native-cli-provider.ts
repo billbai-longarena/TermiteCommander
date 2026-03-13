@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { extractModelName, type WorkerRuntime } from "../../config/model-resolver.js";
 import {
   ProviderError,
@@ -24,6 +26,73 @@ const RUN_ID_KEYS = new Set(["runId", "run_id"]);
 
 const SESSION_ID_REGEX = /"(sessionID|sessionId|session_id|conversation_id|conversationId)"\s*:\s*"([^"]+)"/g;
 const RUN_ID_REGEX = /"(runId|run_id)"\s*:\s*"([^"]+)"/g;
+const CODEX_REASONING_EFFORT = "high";
+
+function getCodexConfigPath(): string {
+  return join(homedir(), ".codex", "config.toml");
+}
+
+export function normalizeNativeCliModel(
+  runtime: WorkerRuntime,
+  model: string | undefined,
+): string | undefined {
+  if (!model) return undefined;
+  return runtime === "claude" || runtime === "codex" ? extractModelName(model) : model;
+}
+
+function stripQuotedTomlSegment(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function getCodexMcpDisableArgs(configPath = getCodexConfigPath()): string[] {
+  try {
+    const raw = readFileSync(configPath, "utf-8");
+    const matches = raw.matchAll(/^\s*\[mcp_servers\.([^\]]+)\]\s*$/gm);
+    const names = new Set<string>();
+    for (const match of matches) {
+      const parsed = stripQuotedTomlSegment(match[1] ?? "");
+      if (/^[A-Za-z0-9_-]+$/.test(parsed)) {
+        names.add(parsed);
+      }
+    }
+
+    const args: string[] = [];
+    for (const name of names) {
+      args.push("-c", `mcp_servers.${name}.enabled=false`);
+    }
+    return args;
+  } catch {
+    return [];
+  }
+}
+
+export function buildCodexExecArgs(options: {
+  workspace: string;
+  prompt: string;
+  model?: string;
+  sessionId?: string | null;
+}): string[] {
+  const workspace = resolve(options.workspace);
+  const runtimeModel = normalizeNativeCliModel("codex", options.model);
+  const args = options.sessionId
+    ? ["exec", "resume", options.sessionId, options.prompt]
+    : ["exec", options.prompt];
+
+  args.push("--json", "--full-auto", "--skip-git-repo-check", "-C", workspace);
+  if (runtimeModel) {
+    args.push("-m", runtimeModel);
+  }
+  args.push("-c", `model_reasoning_effort="${CODEX_REASONING_EFFORT}"`);
+  args.push(...getCodexMcpDisableArgs());
+  return args;
+}
 
 export interface NativeCliLaunchRequest {
   runtime: WorkerRuntime;
@@ -46,11 +115,6 @@ export interface SessionSnapshot {
 }
 
 export class NativeCliProvider implements Provider {
-  private normalizeRuntimeModel(runtime: WorkerRuntime, model: string | undefined): string | undefined {
-    if (!model) return undefined;
-    return runtime === "claude" ? extractModelName(model) : model;
-  }
-
   handshake(): ProviderInfo {
     return {
       contractVersion: "1.0",
@@ -101,7 +165,7 @@ export class NativeCliProvider implements Provider {
 
     if (req.runtime === "opencode") {
       const args = ["run", req.prompt, "--format", "json", "--dir", workspace];
-      const runtimeModel = this.normalizeRuntimeModel(req.runtime, req.model);
+      const runtimeModel = normalizeNativeCliModel(req.runtime, req.model);
       if (runtimeModel) {
         args.push("--model", runtimeModel);
       }
@@ -115,7 +179,7 @@ export class NativeCliProvider implements Provider {
 
     if (req.runtime === "claude") {
       const sessionId = req.sessionId ?? randomUUID();
-      const runtimeModel = this.normalizeRuntimeModel(req.runtime, req.model);
+      const runtimeModel = normalizeNativeCliModel(req.runtime, req.model);
       const args = [
         "-p",
         "--output-format",
@@ -133,13 +197,12 @@ export class NativeCliProvider implements Provider {
       return { command: "claude", args, preassignedSessionId: sessionId };
     }
 
-    const args = req.sessionId
-      ? ["exec", "resume", req.sessionId, req.prompt]
-      : ["exec", req.prompt];
-    args.push("--json", "--full-auto", "--skip-git-repo-check", "-C", workspace);
-    if (req.model) {
-      args.push("-m", req.model);
-    }
+    const args = buildCodexExecArgs({
+      workspace,
+      prompt: req.prompt,
+      model: req.model,
+      sessionId: req.sessionId,
+    });
     return { command: "codex", args, preassignedSessionId: req.sessionId };
   }
 
